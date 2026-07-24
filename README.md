@@ -57,8 +57,8 @@
 | Nguồn | Cơ chế | Dữ liệu thu thập |
 |-------|--------|------------------|
 | **GitHub** | Polling REST API (Events + Search Commits) | Commits, push activities |
-| **Jira** | Polling REST API | Ticket update, comment, estimation change, status change |
-| **Bitbucket** | Polling REST API | Commit, pull request |
+| **Jira** | Polling REST API | Ticket update, comment, estimation change, status change, assignee change |
+| **Bitbucket** | Polling REST API (Server/Cloud) | Commit, PR, PR comment, PR approval |
 | **Git** | Post-commit hook | Local commit (message, files, timestamp) |
 | **Manual** | Web form UI | Meeting, code review, research, other |
 | **🤖 AI Engine** | LLM (Gemini/OpenAI/Claude/...) | Classify, summarize, natural language query |
@@ -92,8 +92,8 @@
 
 ### Thu thập dữ liệu
 - **🔄 Auto-collect GitHub** — Events API + Search Commits API (dual fallback)
-- **🔄 Auto-collect Jira** — Poll API, detect issue update, comment, estimation, status change
-- **🔄 Auto-collect Bitbucket** — Commit mới, PR activities
+- **🔄 Auto-collect Jira** — Poll API, detect issue update, comment, estimation, status, assignee change (broad JQL, filter by active user)
+- **🔄 Auto-collect Bitbucket** — Commit, PR, PR comments, approvals (Server REST API v1.0 + Cloud v2 fallback)
 - **📝 Local Git Tracking** — Post-commit hook ghi mỗi lần commit
 - **➕ Manual Entry** — Form nhập tay cho meeting, code review, research
 - **⏱️ Poll Now** — Manual trigger để poll ngay lập tức
@@ -252,8 +252,8 @@ tool-auto-logwork/
 ├── pollers/
 │   ├── scheduler.py            # APScheduler — lifecycle (immediate startup)
 │   ├── github.py               # 🟣 GitHub Poller — Events + Search Commits
-│   ├── jira.py                 # 🔵 Jira Cloud REST API v3 poller
-│   ├── bitbucket.py            # 🟢 Bitbucket Cloud REST API v2 poller
+│   ├── jira.py                 # 🔵 Jira poller (Cloud API v3 — all activity types)
+│   ├── bitbucket.py            # 🟢 Bitbucket poller (Server API v1.0 + Cloud v2)
 │   └── git_hook_reader.py      # Đọc ~/.worklog_git_hooks.jsonl
 │
 ├── routers/
@@ -560,48 +560,64 @@ JIRA_POLL_INTERVAL_MINUTES=10
 ### Cách hoạt động
 
 Poll REST API v3 mỗi N phút:
-1. JQL: `assignee=currentUser() AND updated>='{last_poll}'`
-2. Phân tích changelog: status change, estimation change
-3. Fetch comments riêng
-4. Ghi DB (dedup bằng external_id)
+1. JQL: `project=PROJ AND updated>='{last_poll}'` (broad — không filter assignee)
+2. Lấy thông tin user hiện tại (`/rest/api/3/myself`) để filter changelog
+3. Phân tích changelog: status, assignee, estimation, summary, description, priority
+4. Fetch comments riêng (chỉ của user hiện tại)
+5. Ghi DB (dedup bằng external_id)
 
 ### Dữ liệu thu thập
 
 | Activity Type | Mô tả |
 |---------------|-------|
 | `status_change` | Issue chuyển trạng thái |
+| `assignee_change` | Thay đổi người assign |
 | `estimation_change` | Thay đổi time estimate |
 | `comment` | Comment mới |
+| `ticket_update` | Thay đổi summary / description / priority |
 
 ---
 
 ## 🔌 Tích hợp Bitbucket
 
+Hỗ trợ **Bitbucket Server / Data Center** và **Bitbucket Cloud**.
+
 ### Cấu hình (.env)
 
 ```ini
+# Bitbucket Server — URL project
 BITBUCKET_USERNAME=your-username
 BITBUCKET_APP_PASSWORD=your-password
-BITBUCKET_WORKSPACE=your-workspace
+BITBUCKET_WORKSPACE=https://your-server.com/projects/PROJ_KEY
 BITBUCKET_POLL_INTERVAL_MINUTES=10
 ```
 
-**Tạo App Password:** Settings → App passwords → Create (permissions: Account Read, Repositories Read, Pull Requests Read)
+**Bitbucket Cloud — dùng workspace slug:**
+```ini
+BITBUCKET_WORKSPACE=your-workspace
+```
+
+> ⚡ Tự động phát hiện Server/Cloud dựa trên format của `BITBUCKET_WORKSPACE`.
 
 ### Cách hoạt động
 
-Poll REST API v2 mỗi N phút:
-1. Lấy repositories trong workspace
-2. Lấy commits gần đây (filter theo user)
-3. Lấy pull requests (OPEN + MERGED)
-4. Ghi DB
+**Bitbucket Server** — REST API v1.0 mỗi N phút:
+1. Lấy repositories trong project
+2. Lấy commits gần đây (filter `since` epoch, match theo user email/name)
+3. Lấy pull requests (all states)
+4. Lấy PR activities: comments, approvals, merges
+5. Ghi DB (dedup bằng external_id)
+
+**Bitbucket Cloud** — REST API v2.0 (backward compatible)
 
 ### Dữ liệu thu thập
 
 | Activity Type | Mô tả |
 |---------------|-------|
 | `commit` | Commit mới |
-| `pr_create` / `pr_merge` | Pull Request activities |
+| `pr_create` / `pr_merge` | Pull Request tạo / merge |
+| `pr_comment` | Comment trên Pull Request |
+| `pr_approve` | Approve Pull Request |
 
 ---
 

@@ -196,8 +196,10 @@
     const labels = {
       ticket_update: "Update", comment: "Comment",
       estimation_change: "Estimation", status_change: "Status",
-      worklog: "Worklog", commit: "Commit", push: "Push",
-      pr_create: "PR Create", pr_merge: "PR Merge", pr_comment: "PR Comment",
+      assignee_change: "Assignee", worklog: "Worklog",
+      commit: "Commit", push: "Push",
+      pr_create: "PR Create", pr_merge: "PR Merge",
+      pr_comment: "PR Comment", pr_approve: "PR Approve",
       local_commit: "Local Commit", meeting: "Meeting",
       code_review: "Code Review", research: "Research", other: "Other",
     };

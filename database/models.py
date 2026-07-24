@@ -18,8 +18,9 @@ class WorkLog(Base):
     source = Column(String(20), nullable=False, index=True)
 
     # Loại hoạt động:
-    #   Jira:     ticket_update | comment | estimation_change | status_change | worklog
-    #   Bitbucket: commit | push | pr_create | pr_merge | pr_comment
+    #   Jira:     ticket_update | comment | estimation_change | status_change
+    #             | assignee_change | worklog
+    #   Bitbucket: commit | push | pr_create | pr_merge | pr_comment | pr_approve
     #   GitHub:   commit | pr_create | pr_merge | issue_create | issue_close | comment
     #   Git:      local_commit
     #   Manual:   meeting | code_review | research | other

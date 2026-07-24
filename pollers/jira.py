@@ -1,12 +1,21 @@
 """Jira API poller — lấy danh sách issue đã update gần đây.
 
 Sử dụng Jira Cloud REST API v3 để query các issue mà current user
-được assign, đã update kể từ lần poll trước, và ghi nhận các
-thay đổi (changelog, comment, worklog).
+đã có hoạt động (status change, assignee change, estimation change,
+comment, v.v.) kể từ lần poll trước.
+
+Cập nhật (24/07/2026):
+  - JQL rộng: lấy tất cả issue trong project đã được update
+    (không còn filter assignee=currentUser())
+  - Fix: first-run since = now - 24h (trước kia = now → 0 results)
+  - Ghi nhận tất cả field changes: status, assignee, estimation,
+    summary, description, priority
+  - Filter changelog theo user hiện tại (displayName / accountId)
+  - Filter comments theo user hiện tại
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -46,13 +55,19 @@ def _save_last_run(dt: datetime) -> None:
     STATE_FILE.write_text(json.dumps(data, indent=2))
 
 
-def _calculate_estimation_change(changelog: list) -> Optional[str]:
-    """Trích xuất thông tin thay đổi estimation từ changelog."""
-    for history in changelog:
-        for item in history.get("items", []):
-            if item.get("field") in ("timeestimate", "timetracking", "timeoriginalestimate"):
-                return f"Estimation changed: {item.get('fromString', 'none')} → {item.get('toString', 'none')}"
-    return None
+def _get_current_user(auth: tuple, base_url: str) -> dict:
+    """Lấy thông tin user hiện tại từ Jira /rest/api/3/myself."""
+    try:
+        resp = httpx.get(
+            f"{base_url}/rest/api/3/myself",
+            auth=auth,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"[Jira] Could not determine current user: {e}")
+        return {}
 
 
 def poll_jira() -> None:
@@ -63,17 +78,33 @@ def poll_jira() -> None:
     auth = (config.JIRA_EMAIL, config.JIRA_API_TOKEN)
     base_url = config.JIRA_URL.rstrip("/")
 
+    # ─── Lấy thông tin user hiện tại → dùng để filter changelog ──
+    current_user = _get_current_user(auth, base_url)
+    user_display = current_user.get("displayName", "")
+    user_account = current_user.get("accountId", "")
+
+    # ─── Tính 'since' timestamp ──────────────────────────────────
     last_run = _get_last_run()
     if last_run is None:
-        # Lần đầu — lấy dữ liệu 24h gần nhất
-        since = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        # Lần đầu — lấy dữ liệu 24h gần nhất (fix: trước kia = now)
+        since = datetime.now(timezone.utc) - timedelta(hours=24)
     else:
         # Cộng thêm 2 phút overlap để không miss data
-        since = last_run - __import__("datetime").timedelta(minutes=2)
+        since = last_run - timedelta(minutes=2)
 
-    jql = f"assignee=currentUser() AND updated>='{since.strftime('%Y-%m-%d %H:%M')}'"
+    since_str = since.strftime("%Y-%m-%d %H:%M")
+
+    # ─── JQL ─────────────────────────────────────────────────────
+    # JQL rộng: tất cả issue trong project đã được update
+    # Không filter assignee nữa — changelog sẽ được filter riêng
     if config.JIRA_PROJECT:
-        jql += f" AND project={config.JIRA_PROJECT}"
+        jql = f"project={config.JIRA_PROJECT} AND updated>='{since_str}'"
+    else:
+        jql = f"updated>='{since_str}'"
+
+    # Nếu không xác định được user → fallback assignee filter để tránh noise
+    if not user_display and not user_account:
+        jql = f"assignee=currentUser() AND {jql}"
 
     try:
         response = httpx.get(
@@ -83,7 +114,7 @@ def poll_jira() -> None:
                 "jql": jql,
                 "expand": "changelog",
                 "maxResults": 50,
-                "fields": "summary,updated,status,timeestimate,comment,project",
+                "fields": "summary,updated,status,timeestimate,comment,project,assignee,priority",
             },
             timeout=30,
         )
@@ -99,84 +130,138 @@ def poll_jira() -> None:
                 issue_key = issue.get("key", "")
                 fields = issue.get("fields", {})
                 changelog = issue.get("changelog", {}).get("histories", [])
-                summary = fields.get("summary", "")
-                project_key = (
-                    fields.get("project", {}).get("key", config.JIRA_PROJECT)
-                )
+                project_key = fields.get("project", {}).get("key", config.JIRA_PROJECT)
 
-                # Nếu có changelog, ghi nhận từng thay đổi
+                # ─── Xử lý changelog ──────────────────────────
                 for history in changelog:
-                    author = history.get("author", {}).get("displayName", "")
-                    created = history.get("created", "")
+                    author = history.get("author", {})
+                    author_name = author.get("displayName", "")
+                    author_id = author.get("accountId", "")
 
+                    # Filter: chỉ ghi nhận thay đổi do user hiện tại thực hiện
+                    if user_display and author_name and author_name != user_display:
+                        # Thử match bằng accountId nếu displayName không khớp
+                        if not user_account or not author_id or author_id != user_account:
+                            continue
+
+                    created = history.get("created", "")
                     try:
                         ts = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                        # Chuyển về UTC naive cho SQLite
                         ts = ts.replace(tzinfo=None)
                     except (ValueError, TypeError):
                         ts = now
 
-                    # Kiểm tra trùng lặp
-                    external_id = f"{issue_key}_changelog_{history.get('id', '')}"
-                    exists = (
-                        db.query(WorkLog)
-                        .filter(WorkLog.external_id == external_id)
-                        .first()
-                    )
-                    if exists:
-                        continue
-
+                    # Xử lý từng field change trong history item
                     for item in history.get("items", []):
                         field = item.get("field", "")
-                        from_str = item.get("fromString", "")
-                        to_str = item.get("toString", "")
+                        from_str = item.get("fromString", "") or ""
+                        to_str = item.get("toString", "") or ""
 
-                        if field in ("status",):
+                        field_slug = field.replace(" ", "_").lower()
+                        ext_id = f"{issue_key}_change_{history.get('id', '')}_{field_slug}"
+
+                        # Kiểm tra trùng lặp
+                        exists = (
+                            db.query(WorkLog)
+                            .filter(WorkLog.external_id == ext_id)
+                            .first()
+                        )
+                        if exists:
+                            continue
+
+                        log = None
+
+                        if field == "status":
                             log = WorkLog(
                                 source="jira",
                                 activity_type="status_change",
                                 title=f"{issue_key}: {from_str} → {to_str}",
-                                description=f"Issue {issue_key} status changed from '{from_str}' to '{to_str}' by {author}",
+                                description=(
+                                    f"Status changed from '{from_str}' to '{to_str}' "
+                                    f"by {author_name}"
+                                ),
                                 project=project_key,
                                 url=f"{base_url}/browse/{issue_key}",
                                 activity_timestamp=ts,
-                                external_id=external_id,
+                                time_spent_minutes=0,
+                                external_id=ext_id,
                                 created_at=now,
                             )
-                            db.add(log)
-                            new_count += 1
 
                         elif field in (
-                            "timeestimate",
-                            "timetracking",
-                            "timeoriginalestimate",
+                            "timeestimate", "timetracking", "timeoriginalestimate"
                         ):
                             log = WorkLog(
                                 source="jira",
                                 activity_type="estimation_change",
-                                title=f"{issue_key}: Estimation {from_str or 'none'} → {to_str or 'none'}",
-                                description=f"Estimation changed from '{from_str or 'none'}' to '{to_str or 'none'}' by {author}",
+                                title=(
+                                    f"{issue_key}: Estimation "
+                                    f"{from_str or 'none'} → {to_str or 'none'}"
+                                ),
+                                description=(
+                                    f"Estimation changed from '{from_str or 'none'}' "
+                                    f"to '{to_str or 'none'}' by {author_name}"
+                                ),
                                 project=project_key,
                                 url=f"{base_url}/browse/{issue_key}",
                                 activity_timestamp=ts,
-                                external_id=f"{external_id}_{item.get('field', '')}",
+                                time_spent_minutes=0,
+                                external_id=ext_id,
                                 created_at=now,
                             )
+
+                        elif field == "assignee":
+                            log = WorkLog(
+                                source="jira",
+                                activity_type="assignee_change",
+                                title=(
+                                    f"{issue_key}: "
+                                    f"{from_str or 'Unassigned'} → {to_str or 'Unassigned'}"
+                                ),
+                                description=(
+                                    f"Assignee changed from '{from_str or 'unassigned'}' "
+                                    f"to '{to_str or 'unassigned'}' by {author_name}"
+                                ),
+                                project=project_key,
+                                url=f"{base_url}/browse/{issue_key}",
+                                activity_timestamp=ts,
+                                time_spent_minutes=0,
+                                external_id=ext_id,
+                                created_at=now,
+                            )
+
+                        elif field in ("summary", "description", "priority"):
+                            log = WorkLog(
+                                source="jira",
+                                activity_type="ticket_update",
+                                title=f"{issue_key}: {field} updated",
+                                description=(
+                                    f"Field '{field}' changed "
+                                    f"by {author_name}: "
+                                    f"'{from_str[:100] or ''}' → '{to_str[:100] or ''}'"
+                                ),
+                                project=project_key,
+                                url=f"{base_url}/browse/{issue_key}",
+                                activity_timestamp=ts,
+                                time_spent_minutes=0,
+                                external_id=ext_id,
+                                created_at=now,
+                            )
+
+                        if log:
                             db.add(log)
                             new_count += 1
 
-                        elif field in ("summary", "description", "priority", "assignee"):
-                            # Bỏ qua log riêng cho summary/description thay đổi
-                            # để tránh spam, nhưng vẫn ghi nếu có estimation thay đổi kèm
-                            pass
-
-            # Kiểm tra comments (Jira API không trả comment trong changelog
-            # một cách đầy đủ, cần fetch riêng)
-            comment_count = _fetch_comments(db, base_url, auth, issue_keys=[i["key"] for i in data.get("issues", [])])
+            # ─── Fetch comments ──────────────────────────────
+            issue_keys = [i["key"] for i in data.get("issues", [])]
+            comment_count = _fetch_comments(
+                db, base_url, auth, issue_keys, user_display, now
+            )
             new_count += comment_count
 
             if new_count > 0:
                 db.commit()
+                print(f"[Jira Poller] ✓ Captured {new_count} new activities")
 
         except Exception:
             db.rollback()
@@ -187,7 +272,10 @@ def poll_jira() -> None:
         _save_last_run(datetime.utcnow())
 
     except httpx.HTTPStatusError as e:
-        print(f"[Jira Poller] HTTP Error: {e.response.status_code} - {e.response.text[:200]}")
+        print(
+            f"[Jira Poller] HTTP Error: "
+            f"{e.response.status_code} — {e.response.text[:200]}"
+        )
     except httpx.RequestError as e:
         print(f"[Jira Poller] Connection Error: {e}")
     except Exception as e:
@@ -195,22 +283,30 @@ def poll_jira() -> None:
 
 
 def _fetch_comments(
-    db, base_url: str, auth, issue_keys: list[str]
+    db, base_url: str, auth: tuple, issue_keys: list[str],
+    user_display: str, now: datetime,
 ) -> int:
-    """Fetch comments mới cho danh sách issue keys."""
+    """Fetch comments mới — chỉ lấy comment của user hiện tại."""
     count = 0
     for key in issue_keys:
         try:
             resp = httpx.get(
                 f"{base_url}/rest/api/3/issue/{key}/comment",
                 auth=auth,
-                params={"orderBy": "-created", "maxResults": 10},
+                params={"orderBy": "-created", "maxResults": 50},
                 timeout=15,
             )
             if resp.status_code != 200:
                 continue
             comments = resp.json().get("comments", [])
             for comment in comments:
+                author_info = comment.get("author", {})
+                author_name = author_info.get("displayName", "")
+
+                # Chỉ lấy comment của user hiện tại
+                if user_display and author_name and author_name != user_display:
+                    continue
+
                 created = comment.get("created", "")
                 try:
                     ts = datetime.fromisoformat(created.replace("Z", "+00:00"))
@@ -229,9 +325,7 @@ def _fetch_comments(
                     continue
 
                 body = comment.get("body", "")
-                # Jira Cloud trả về ADF (Atlassian Document Format) hoặc plain text
                 if isinstance(body, dict):
-                    # ADF — lấy plain text đơn giản
                     text = _extract_adf_text(body)
                 else:
                     text = str(body)[:500]
@@ -239,13 +333,14 @@ def _fetch_comments(
                 log = WorkLog(
                     source="jira",
                     activity_type="comment",
-                    title=f"{key}: New comment",
+                    title=f"{key}: Commented on {key}",
                     description=text[:500],
                     project=config.JIRA_PROJECT or "",
                     url=f"{base_url}/browse/{key}?focusedCommentId={comment_id}",
                     activity_timestamp=ts,
+                    time_spent_minutes=0,
                     external_id=external_id,
-                    created_at=datetime.utcnow(),
+                    created_at=now,
                 )
                 db.add(log)
                 count += 1
