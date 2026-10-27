@@ -1,20 +1,24 @@
 """Router export — xuất dữ liệu ra Excel file."""
 
 import io
+import logging
 from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 
+from core.exceptions import ValidationError
 from database.db import get_db
 from database.models import WorkLog
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/export", tags=["export"])
+
+VALID_SOURCES = {"jira", "bitbucket", "github", "git", "manual"}
 
 
 # ─── Styling constants ────────────────────────────────
@@ -38,10 +42,11 @@ SOURCE_COLORS = {
     "bitbucket": PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid"),
     "git": PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid"),
     "manual": PatternFill(start_color="F2DCDB", end_color="F2DCDB", fill_type="solid"),
+    "github": PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid"),
 }
 
 
-def _build_workbook(source_filter: Optional[str]) -> io.BytesIO:
+def _build_workbook(source_filter: str | None, session: Session) -> io.BytesIO:
     """Tạo Excel workbook từ dữ liệu work logs."""
     wb = Workbook()
     ws = wb.active
@@ -66,7 +71,7 @@ def _build_workbook(source_filter: Optional[str]) -> io.BytesIO:
     # Column widths
     col_widths = [6, 12, 16, 40, 50, 18, 50, 20, 12, 14, 24, 20]
 
-    for col_idx, (header, width) in enumerate(zip(headers, col_widths), 1):
+    for col_idx, (header, width) in enumerate(zip(headers, col_widths, strict=False), 1):
         cell = ws.cell(row=1, column=col_idx, value=header)
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
@@ -74,87 +79,77 @@ def _build_workbook(source_filter: Optional[str]) -> io.BytesIO:
         cell.border = THIN_BORDER
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
-    # ─── Data & Summary (1 session duy nhất) ─────────
-    db = get_db()
-    try:
-        session: Session = next(db)
+    # ─── Data & Summary ───────────────────────────────
+    q = session.query(WorkLog).order_by(WorkLog.activity_timestamp.desc())
+    if source_filter:
+        q = q.filter(WorkLog.source == source_filter)
 
-        # Build query (có hoặc không filter)
-        q = session.query(WorkLog).order_by(WorkLog.activity_timestamp.desc())
-        if source_filter:
-            q = q.filter(WorkLog.source == source_filter)
+    all_logs = q.all()
+    total_time = sum(log.time_spent_minutes or 0 for log in all_logs)
+    total = len(all_logs)
 
-        # Dùng cùng query cho cả data rows và summary
-        all_logs = q.all()
-        total_time = sum(log.time_spent_minutes or 0 for log in all_logs)
-        total = len(all_logs)
+    # ─── Data rows ────────────────────────────────
+    for row_idx, log in enumerate(all_logs, 2):
+        source_fill = SOURCE_COLORS.get(log.source)
 
-        # ─── Data rows ────────────────────────────────
-        for row_idx, log in enumerate(all_logs, 2):
-            source_fill = SOURCE_COLORS.get(log.source)
-
-            values = [
-                log.id,
-                log.source,
-                log.activity_type,
-                log.title,
-                log.description or "",
-                log.project or "",
-                log.url or "",
-                log.activity_timestamp.strftime("%Y-%m-%d %H:%M") if log.activity_timestamp else "",
-                round(log.time_spent_minutes / 60, 2) if log.time_spent_minutes else 0,
-                log.time_spent_minutes or 0,
-                log.external_id or "",
-                log.created_at.strftime("%Y-%m-%d %H:%M") if log.created_at else "",
-            ]
-
-            for col_idx, value in enumerate(values, 1):
-                cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                cell.font = CELL_FONT
-                cell.alignment = CELL_ALIGNMENT
-                cell.border = THIN_BORDER
-                if source_fill:
-                    cell.fill = source_fill
-
-        # ─── Freeze panes ──────────────────────────────
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = ws.dimensions
-
-        # ─── Summary sheet (dùng cùng source_filter) ──
-        ws2 = wb.create_sheet("Summary")
-        summary_headers = ["Metric", "Value"]
-        for col_idx, h in enumerate(summary_headers, 1):
-            cell = ws2.cell(row=1, column=col_idx, value=h)
-            cell.font = HEADER_FONT
-            cell.fill = HEADER_FILL
-            cell.border = THIN_BORDER
-        ws2.column_dimensions["A"].width = 25
-        ws2.column_dimensions["B"].width = 15
-
-        # Đếm theo source (dựa trên dữ liệu đã filter)
-        counts = {}
-        for log in all_logs:
-            counts[log.source] = counts.get(log.source, 0) + 1
-
-        summary_data = [
-            ("Total Logs", total),
-            ("Total Time (hours)", round(total_time / 60, 1)),
-            ("Total Time (minutes)", total_time),
-            ("Jira Activities", counts.get("jira", 0)),
-            ("Bitbucket Activities", counts.get("bitbucket", 0)),
-            ("GitHub Activities", counts.get("github", 0)),
-            ("Git Commits", counts.get("git", 0)),
-            ("Manual Entries", counts.get("manual", 0)),
+        values = [
+            log.id,
+            log.source,
+            log.activity_type,
+            log.title,
+            log.description or "",
+            log.project or "",
+            log.url or "",
+            log.activity_timestamp.strftime("%Y-%m-%d %H:%M") if log.activity_timestamp else "",
+            round(log.time_spent_minutes / 60, 2) if log.time_spent_minutes else 0,
+            log.time_spent_minutes or 0,
+            log.external_id or "",
+            log.created_at.strftime("%Y-%m-%d %H:%M") if log.created_at else "",
         ]
 
-        for row_idx, (metric, value) in enumerate(summary_data, 2):
-            ws2.cell(row=row_idx, column=1, value=metric).font = CELL_FONT
-            ws2.cell(row=row_idx, column=2, value=value).font = CELL_FONT
-            ws2.cell(row=row_idx, column=1).border = THIN_BORDER
-            ws2.cell(row=row_idx, column=2).border = THIN_BORDER
+        for col_idx, value in enumerate(values, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.font = CELL_FONT
+            cell.alignment = CELL_ALIGNMENT
+            cell.border = THIN_BORDER
+            if source_fill:
+                cell.fill = source_fill
 
-    finally:
-        db.close()
+    # ─── Freeze panes ──────────────────────────────
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+    # ─── Summary sheet ────────────────────────────
+    ws2 = wb.create_sheet("Summary")
+    summary_headers = ["Metric", "Value"]
+    for col_idx, h in enumerate(summary_headers, 1):
+        cell = ws2.cell(row=1, column=col_idx, value=h)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.border = THIN_BORDER
+    ws2.column_dimensions["A"].width = 25
+    ws2.column_dimensions["B"].width = 15
+
+    counts = {}
+    for log in all_logs:
+        counts[log.source] = counts.get(log.source, 0) + 1
+
+    summary_data = [
+        ("Total Logs", total),
+        ("Total Time (hours)", round(total_time / 60, 1)),
+        ("Total Time (minutes)", total_time),
+        ("Jira Activities", counts.get("jira", 0)),
+        ("Bitbucket Activities", counts.get("bitbucket", 0)),
+        ("GitHub Activities", counts.get("github", 0)),
+        ("Git Commits", counts.get("git", 0)),
+        ("Manual Entries", counts.get("manual", 0)),
+    ]
+
+    for row_idx, (metric, value) in enumerate(summary_data, 2):
+        ws2.cell(row=row_idx, column=1, value=metric).font = CELL_FONT
+        ws2.cell(row=row_idx, column=2, value=value).font = CELL_FONT
+        ws2.cell(row=row_idx, column=1).border = THIN_BORDER
+        ws2.cell(row=row_idx, column=2).border = THIN_BORDER
 
     output = io.BytesIO()
     wb.save(output)
@@ -164,7 +159,8 @@ def _build_workbook(source_filter: Optional[str]) -> io.BytesIO:
 
 @router.get("/excel")
 def export_excel(
-    source: Optional[str] = Query(None, description="Filter by source"),
+    source: str | None = Query(None, description="Filter by source"),
+    db: Session = Depends(get_db),
 ):
     """Export work logs ra file Excel (.xlsx).
 
@@ -172,7 +168,7 @@ def export_excel(
     - Work Logs: chi tiết từng entry
     - Summary: thống kê tổng quan
     """
-    output = _build_workbook(source)
+    output = _build_workbook(source, db)
 
     filename = f"worklog_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
@@ -186,13 +182,13 @@ def export_excel(
 
 
 @router.get("/excel/{source}")
-def export_excel_by_source(source: str):
-    """Export work logs theo nguồn cụ thể (jira/bitbucket/git/manual)."""
-    valid_sources = {"jira", "bitbucket", "github", "git", "manual"}
-    if source not in valid_sources:
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid source. Must be one of: {', '.join(valid_sources)}",
+def export_excel_by_source(
+    source: str,
+    db: Session = Depends(get_db),
+):
+    """Export work logs theo nguồn cụ thể (jira/bitbucket/github/git/manual)."""
+    if source not in VALID_SOURCES:
+        raise ValidationError(
+            f"Invalid source '{source}'. Must be one of: {', '.join(VALID_SOURCES)}"
         )
-    return export_excel(source=source)
+    return export_excel(source=source, db=db)

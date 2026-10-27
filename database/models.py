@@ -1,8 +1,8 @@
 """SQLAlchemy models cho Work Log Tracker."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
-from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy import Column, DateTime, Integer, String, Text
 
 from database.db import Base
 
@@ -51,7 +51,7 @@ class WorkLog(Base):
     metadata_json = Column(Text, nullable=True)
 
     # Thời điểm log được tạo trong hệ thống
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), nullable=False)
 
 
 class AppSetting(Base):
@@ -63,7 +63,7 @@ class AppSetting(Base):
     value = Column(Text, nullable=True)
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
         nullable=False,
     )

@@ -1,0 +1,17 @@
+{
+  "name": "work-log-harness-frontend",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Dev tooling (lint/format) for the Work Log Harness vanilla JS frontend. No build step — modules are served directly.",
+  "type": "module",
+  "scripts": {
+    "lint": "eslint static/js/",
+    "lint:fix": "eslint static/js/ --fix",
+    "format": "prettier --write \"static/js/**/*.js\" \"static/style.css\" \"templates/*.html\"",
+    "format:check": "prettier --check \"static/js/**/*.js\" \"static/style.css\" \"templates/*.html\""
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0"
+  }
+}

@@ -14,22 +14,25 @@ Cập nhật (24/07/2026):
   - Filter comments theo user hiện tại
 """
 
+import contextlib
 import json
-from datetime import datetime, timedelta, timezone
+import logging
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 import httpx
 
 from config import config
 from database.db import SessionLocal
 from database.models import WorkLog
+from pollers.http import request_with_retry
 
+logger = logging.getLogger("pollers.jira")
 
 STATE_FILE = Path(__file__).resolve().parent.parent / "poller_state.json"
 
 
-def _get_last_run() -> Optional[datetime]:
+def _get_last_run() -> datetime | None:
     """Lấy thời điểm poll thành công gần nhất."""
     if not STATE_FILE.exists():
         return None
@@ -47,10 +50,8 @@ def _save_last_run(dt: datetime) -> None:
     """Ghi thời điểm poll thành công."""
     data = {}
     if STATE_FILE.exists():
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             data = json.loads(STATE_FILE.read_text())
-        except json.JSONDecodeError:
-            pass
     data["jira_last_run"] = dt.isoformat()
     STATE_FILE.write_text(json.dumps(data, indent=2))
 
@@ -58,15 +59,17 @@ def _save_last_run(dt: datetime) -> None:
 def _get_current_user(auth: tuple, base_url: str) -> dict:
     """Lấy thông tin user hiện tại từ Jira /rest/api/3/myself."""
     try:
-        resp = httpx.get(
+        resp = request_with_retry(
+            "GET",
             f"{base_url}/rest/api/3/myself",
             auth=auth,
             timeout=15,
+            log_name="Jira",
         )
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
-        print(f"[Jira] Could not determine current user: {e}")
+        logger.error("Could not determine current user: %s", e)
         return {}
 
 
@@ -87,7 +90,7 @@ def poll_jira() -> None:
     last_run = _get_last_run()
     if last_run is None:
         # Lần đầu — lấy dữ liệu 24h gần nhất (fix: trước kia = now)
-        since = datetime.now(timezone.utc) - timedelta(hours=24)
+        since = datetime.now(UTC) - timedelta(hours=24)
     else:
         # Cộng thêm 2 phút overlap để không miss data
         since = last_run - timedelta(minutes=2)
@@ -107,7 +110,8 @@ def poll_jira() -> None:
         jql = f"assignee=currentUser() AND {jql}"
 
     try:
-        response = httpx.get(
+        response = request_with_retry(
+            "GET",
             f"{base_url}/rest/api/3/search",
             auth=auth,
             params={
@@ -117,13 +121,14 @@ def poll_jira() -> None:
                 "fields": "summary,updated,status,timeestimate,comment,project,assignee,priority",
             },
             timeout=30,
+            log_name="Jira",
         )
         response.raise_for_status()
         data = response.json()
 
         db = SessionLocal()
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             new_count = 0
 
             for issue in data.get("issues", []):
@@ -139,10 +144,14 @@ def poll_jira() -> None:
                     author_id = author.get("accountId", "")
 
                     # Filter: chỉ ghi nhận thay đổi do user hiện tại thực hiện
-                    if user_display and author_name and author_name != user_display:
-                        # Thử match bằng accountId nếu displayName không khớp
-                        if not user_account or not author_id or author_id != user_account:
-                            continue
+                    # (thử match bằng accountId nếu displayName không khớp)
+                    if (
+                        user_display
+                        and author_name
+                        and author_name != user_display
+                        and (not user_account or not author_id or author_id != user_account)
+                    ):
+                        continue
 
                     created = history.get("created", "")
                     try:
@@ -161,11 +170,7 @@ def poll_jira() -> None:
                         ext_id = f"{issue_key}_change_{history.get('id', '')}_{field_slug}"
 
                         # Kiểm tra trùng lặp
-                        exists = (
-                            db.query(WorkLog)
-                            .filter(WorkLog.external_id == ext_id)
-                            .first()
-                        )
+                        exists = db.query(WorkLog).filter(WorkLog.external_id == ext_id).first()
                         if exists:
                             continue
 
@@ -188,9 +193,7 @@ def poll_jira() -> None:
                                 created_at=now,
                             )
 
-                        elif field in (
-                            "timeestimate", "timetracking", "timeoriginalestimate"
-                        ):
+                        elif field in ("timeestimate", "timetracking", "timeoriginalestimate"):
                             log = WorkLog(
                                 source="jira",
                                 activity_type="estimation_change",
@@ -254,13 +257,12 @@ def poll_jira() -> None:
 
             # ─── Fetch comments ──────────────────────────────
             issue_keys = [i["key"] for i in data.get("issues", [])]
-            comment_count = _fetch_comments(
-                db, base_url, auth, issue_keys, user_display, now
-            )
+            comment_count = _fetch_comments(db, base_url, auth, issue_keys, user_display, now)
             new_count += comment_count
 
             if new_count > 0:
                 db.commit()
+                logger.info("Captured %d new activities", new_count)
                 print(f"[Jira Poller] ✓ Captured {new_count} new activities")
 
         except Exception:
@@ -269,32 +271,42 @@ def poll_jira() -> None:
         finally:
             db.close()
 
-        _save_last_run(datetime.utcnow())
+        _save_last_run(datetime.now(timezone.utc).replace(tzinfo=None))
 
     except httpx.HTTPStatusError as e:
-        print(
-            f"[Jira Poller] HTTP Error: "
-            f"{e.response.status_code} — {e.response.text[:200]}"
+        logger.error(
+            "HTTP Error: %s — %s",
+            e.response.status_code,
+            e.response.text[:200],
         )
+        print(f"[Jira Poller] HTTP Error: {e.response.status_code} — {e.response.text[:200]}")
     except httpx.RequestError as e:
+        logger.error("Connection Error: %s", e)
         print(f"[Jira Poller] Connection Error: {e}")
     except Exception as e:
+        logger.exception("Unexpected Error: %s", e)
         print(f"[Jira Poller] Unexpected Error: {e}")
 
 
 def _fetch_comments(
-    db, base_url: str, auth: tuple, issue_keys: list[str],
-    user_display: str, now: datetime,
+    db,
+    base_url: str,
+    auth: tuple,
+    issue_keys: list[str],
+    user_display: str,
+    now: datetime,
 ) -> int:
     """Fetch comments mới — chỉ lấy comment của user hiện tại."""
     count = 0
     for key in issue_keys:
         try:
-            resp = httpx.get(
+            resp = request_with_retry(
+                "GET",
                 f"{base_url}/rest/api/3/issue/{key}/comment",
                 auth=auth,
                 params={"orderBy": "-created", "maxResults": 50},
                 timeout=15,
+                log_name="Jira",
             )
             if resp.status_code != 200:
                 continue
@@ -316,19 +328,12 @@ def _fetch_comments(
 
                 comment_id = comment.get("id", "")
                 external_id = f"{key}_comment_{comment_id}"
-                exists = (
-                    db.query(WorkLog)
-                    .filter(WorkLog.external_id == external_id)
-                    .first()
-                )
+                exists = db.query(WorkLog).filter(WorkLog.external_id == external_id).first()
                 if exists:
                     continue
 
                 body = comment.get("body", "")
-                if isinstance(body, dict):
-                    text = _extract_adf_text(body)
-                else:
-                    text = str(body)[:500]
+                text = _extract_adf_text(body) if isinstance(body, dict) else str(body)[:500]
 
                 log = WorkLog(
                     source="jira",

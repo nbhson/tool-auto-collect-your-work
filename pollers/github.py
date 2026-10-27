@@ -4,22 +4,26 @@ Sử dụng GitHub REST API v3 (Events API + Search API) để lấy hoạt đ�
 của user hiện tại từ tất cả repositories.
 """
 
+import contextlib
 import json
-from datetime import datetime, timedelta, timezone
+import logging
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional
 
 import httpx
 
 from config import config
 from database.db import SessionLocal
 from database.models import WorkLog
+from pollers.http import request_with_retry
+
+logger = logging.getLogger("pollers.github")
 
 
 STATE_FILE = Path(__file__).resolve().parent.parent / "poller_state.json"
 
 
-def _get_last_run() -> Optional[datetime]:
+def _get_last_run() -> datetime | None:
     if not STATE_FILE.exists():
         return None
     try:
@@ -35,10 +39,8 @@ def _get_last_run() -> Optional[datetime]:
 def _save_last_run(dt: datetime) -> None:
     data = {}
     if STATE_FILE.exists():
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             data = json.loads(STATE_FILE.read_text())
-        except json.JSONDecodeError:
-            pass
     data["github_last_run"] = dt.isoformat()
     STATE_FILE.write_text(json.dumps(data, indent=2))
 
@@ -51,18 +53,20 @@ def _headers() -> dict:
     }
 
 
-def _get_username() -> Optional[str]:
+def _get_username() -> str | None:
     """Lấy GitHub username từ token."""
     try:
-        resp = httpx.get(
+        resp = request_with_retry(
+            "GET",
             "https://api.github.com/user",
             headers=_headers(),
             timeout=15,
+            log_name="GitHub",
         )
         resp.raise_for_status()
         return resp.json().get("login")
     except httpx.HTTPError as e:
-        print(f"[GitHub Poller] Failed to get user: {e}")
+        logger.error("Failed to get user: %s", e)
         return None
 
 
@@ -78,7 +82,7 @@ def poll_github() -> None:
     base_api = "https://api.github.com"
 
     last_run = _get_last_run()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     if last_run is None:
         since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -121,11 +125,7 @@ def poll_github() -> None:
                     ts = now
 
                 external_id = f"github_commit_{sha}"
-                exists = (
-                    db.query(WorkLog)
-                    .filter(WorkLog.external_id == external_id)
-                    .first()
-                )
+                exists = db.query(WorkLog).filter(WorkLog.external_id == external_id).first()
                 if exists:
                     continue
 
@@ -134,10 +134,7 @@ def poll_github() -> None:
                     source="github",
                     activity_type="commit",
                     title=f"[{repo_short}] {msg[:100]}",
-                    description=(
-                        f"Commit by {author_name} | "
-                        f"Repo: {repo_full} | SHA: {sha[:12]}"
-                    ),
+                    description=(f"Commit by {author_name} | Repo: {repo_full} | SHA: {sha[:12]}"),
                     project=repo_full,
                     url=f"https://github.com/{repo_full}/commit/{sha}",
                     activity_timestamp=ts,
@@ -155,9 +152,8 @@ def poll_github() -> None:
             if not sha:
                 continue
 
-            repo_full = (
-                (commit.get("repository", {}) or {}).get("full_name", "")
-                or _issue_repo(commit.get("html_url", ""))
+            repo_full = (commit.get("repository", {}) or {}).get("full_name", "") or _issue_repo(
+                commit.get("html_url", "")
             )
             if not repo_full or repo_full == "unknown":
                 continue
@@ -175,11 +171,7 @@ def poll_github() -> None:
                 ts = now
 
             external_id = f"github_commit_{sha}"
-            exists = (
-                db.query(WorkLog)
-                .filter(WorkLog.external_id == external_id)
-                .first()
-            )
+            exists = db.query(WorkLog).filter(WorkLog.external_id == external_id).first()
             if exists:
                 continue
 
@@ -188,10 +180,7 @@ def poll_github() -> None:
                 source="github",
                 activity_type="commit",
                 title=f"[{repo_short}] {msg[:100]}",
-                description=(
-                    f"Commit by {author_name} | "
-                    f"Repo: {repo_full} | SHA: {sha[:12]}"
-                ),
+                description=(f"Commit by {author_name} | Repo: {repo_full} | SHA: {sha[:12]}"),
                 project=repo_full,
                 url=f"https://github.com/{repo_full}/commit/{sha}",
                 activity_timestamp=ts,
@@ -219,12 +208,8 @@ def poll_github() -> None:
             except (ValueError, TypeError):
                 ts = now
 
-            external_id = f"github_pr_{pr_id}"
-            exists = (
-                db.query(WorkLog)
-                .filter(WorkLog.external_id == external_id)
-                .first()
-            )
+            external_id = f"github_pr_{repo_full}_{pr_id}"
+            exists = db.query(WorkLog).filter(WorkLog.external_id == external_id).first()
             if exists:
                 continue
 
@@ -269,12 +254,8 @@ def poll_github() -> None:
             except (ValueError, TypeError):
                 ts = now
 
-            external_id = f"github_issue_{issue_id}"
-            exists = (
-                db.query(WorkLog)
-                .filter(WorkLog.external_id == external_id)
-                .first()
-            )
+            external_id = f"github_issue_{repo_full}_{issue_id}"
+            exists = db.query(WorkLog).filter(WorkLog.external_id == external_id).first()
             if exists:
                 continue
 
@@ -304,7 +285,7 @@ def poll_github() -> None:
             repo_full = event.get("repo", {}).get("name", "")
             repo_name = repo_full.split("/")[-1] if "/" in repo_full else repo_full
             payload = event.get("payload", {})
-            action = payload.get("action", "")
+            payload.get("action", "")
 
             # Determine issue/PR number
             if event["type"] == "IssueCommentEvent":
@@ -330,11 +311,7 @@ def poll_github() -> None:
                 ts = now
 
             external_id = f"github_comment_{comment_id}"
-            exists = (
-                db.query(WorkLog)
-                .filter(WorkLog.external_id == external_id)
-                .first()
-            )
+            exists = db.query(WorkLog).filter(WorkLog.external_id == external_id).first()
             if exists:
                 continue
 
@@ -342,9 +319,7 @@ def poll_github() -> None:
                 source="github",
                 activity_type="comment",
                 title=f"[{repo_name}] Comment on {item_type} #{number}",
-                description=(
-                    f"Comment on {item_type} #{number} '{item_title[:100]}'"
-                ),
+                description=(f"Comment on {item_type} #{number} '{item_title[:100]}'"),
                 project=repo_full,
                 url=f"https://github.com/{repo_full}/{item_type.lower()}/{number}",
                 activity_timestamp=ts,
@@ -361,7 +336,7 @@ def poll_github() -> None:
 
     except Exception as e:
         db.rollback()
-        print(f"[GitHub Poller] Error: {e}")
+        logger.exception("GitHub poller error: %s", e)
     finally:
         db.close()
 
@@ -374,36 +349,40 @@ def _get_repo_commits(
 ) -> tuple[str, list]:
     """Lấy commits của user trong 1 repository."""
     try:
-        resp = httpx.get(
+        resp = request_with_retry(
+            "GET",
             f"{base_api}/repos/{owner}/{repo}/commits",
             headers=_headers(),
             params={"author": username, "since": since, "per_page": 20},
             timeout=15,
+            log_name="GitHub",
         )
         if resp.status_code == 409:
             return repo, []
         resp.raise_for_status()
         return repo, resp.json()
     except httpx.HTTPError as e:
-        print(f"[GitHub Poller] Commits error for {owner}/{repo}: {e}")
+        logger.error("Commits error for %s/%s: %s", owner, repo, e)
         return repo, []
 
 
 def _get_user_events(username: str, base_api: str) -> list:
     """Lấy events gần đây của user."""
     try:
-        resp = httpx.get(
+        resp = request_with_retry(
+            "GET",
             f"{base_api}/users/{username}/events",
             headers=_headers(),
             params={"per_page": 100},
             timeout=15,
+            log_name="GitHub",
         )
         if resp.status_code == 404:
             return []
         resp.raise_for_status()
         return resp.json()
     except httpx.HTTPError as e:
-        print(f"[GitHub Poller] Events error: {e}")
+        logger.error("Events error: %s", e)
         return []
 
 
@@ -411,16 +390,18 @@ def _search_issues(username: str, issue_type: str, since: str, base_api: str) ->
     """Search issues (is:pr hoặc is:issue) của user."""
     q = f"author:{username} is:{issue_type} updated:>{since}"
     try:
-        resp = httpx.get(
+        resp = request_with_retry(
+            "GET",
             f"{base_api}/search/issues",
             headers=_headers(),
             params={"q": q, "sort": "updated", "order": "desc", "per_page": 20},
             timeout=15,
+            log_name="GitHub",
         )
         resp.raise_for_status()
         return resp.json().get("items", [])
     except httpx.HTTPError as e:
-        print(f"[GitHub Poller] Search {issue_type} error: {e}")
+        logger.error("Search %s error: %s", issue_type, e)
         return []
 
 
@@ -434,7 +415,8 @@ def _search_commits(username: str, since: str, base_api: str) -> list:
     headers = _headers()
     headers["Accept"] = "application/vnd.github.claw-graw-preview+json"
     try:
-        resp = httpx.get(
+        resp = request_with_retry(
+            "GET",
             f"{base_api}/search/commits",
             headers=headers,
             params={
@@ -444,11 +426,12 @@ def _search_commits(username: str, since: str, base_api: str) -> list:
                 "per_page": 50,
             },
             timeout=15,
+            log_name="GitHub",
         )
         resp.raise_for_status()
         return resp.json().get("items", [])
     except httpx.HTTPError as e:
-        print(f"[GitHub Poller] Search commits error: {e}")
+        logger.error("Search commits error: %s", e)
         return []
 
 

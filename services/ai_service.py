@@ -9,7 +9,7 @@ Mỗi method là một "ability" của harness: classify, summarize, analyze.
 """
 
 import json
-from typing import Optional, Any
+from typing import Any
 
 import httpx
 
@@ -49,9 +49,7 @@ class AIService:
         "custom": {"base_url": "", "model": "", "label": "Custom"},
     }
 
-    PROVIDER_CHOICES = [
-        {"id": k, "label": v["label"]} for k, v in PROVIDER_PRESETS.items()
-    ]
+    PROVIDER_CHOICES = [{"id": k, "label": v["label"]} for k, v in PROVIDER_PRESETS.items()]
 
     def __init__(
         self,
@@ -72,16 +70,14 @@ class AIService:
     async def chat(
         self,
         messages: list[dict[str, str]],
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         temperature: float = 0.3,
         max_tokens: int = 2000,
         response_json: bool = False,
     ) -> str:
         """Gửi prompt tới LLM và trả về text response."""
         if self.provider in self.PROVIDER_ANTHROPIC:
-            return await self._call_anthropic(
-                messages, system_prompt, temperature, max_tokens
-            )
+            return await self._call_anthropic(messages, system_prompt, temperature, max_tokens)
         return await self._call_openai_style(
             messages, system_prompt, temperature, max_tokens, response_json
         )
@@ -89,7 +85,7 @@ class AIService:
     async def _call_openai_style(
         self,
         messages: list[dict[str, str]],
-        system_prompt: Optional[str],
+        system_prompt: str | None,
         temperature: float,
         max_tokens: int,
         response_json: bool,
@@ -124,7 +120,7 @@ class AIService:
     async def _call_anthropic(
         self,
         messages: list[dict[str, str]],
-        system_prompt: Optional[str],
+        system_prompt: str | None,
         temperature: float,
         max_tokens: int,
     ) -> str:
@@ -134,9 +130,7 @@ class AIService:
         for msg in messages:
             role = msg.get("role", "user")
             if role != "system":
-                anthro_messages.append(
-                    {"role": role, "content": msg.get("content", "")}
-                )
+                anthro_messages.append({"role": role, "content": msg.get("content", "")})
 
         payload: dict[str, Any] = {
             "model": self.model,
@@ -190,26 +184,28 @@ class AIService:
                     mid = m.get("id", "")
                     if mid and mid not in seen:
                         seen.add(mid)
-                        models.append({
-                            "id": mid,
-                            "owned_by": m.get("owned_by", ""),
-                        })
+                        models.append(
+                            {
+                                "id": mid,
+                                "owned_by": m.get("owned_by", ""),
+                            }
+                        )
 
                 # Ưu tiên model có sẵn ở trên cùng
-                models.sort(key=lambda x: (
-                    # Các model "chính" lên đầu
-                    not x["id"].startswith(("gpt-4", "gemini", "claude", "deepseek")),
-                    x["id"],
-                ))
+                models.sort(
+                    key=lambda x: (
+                        # Các model "chính" lên đầu
+                        not x["id"].startswith(("gpt-4", "gemini", "claude", "deepseek")),
+                        x["id"],
+                    )
+                )
                 return models
         except Exception:
             return []
 
     # ── Harness abilities ─────────────────────────────
 
-    async def enhance_log(
-        self, title: str, description: str = "", activity_type: str = ""
-    ) -> dict:
+    async def enhance_log(self, title: str, description: str = "", activity_type: str = "") -> dict:
         """Rewrite description professionally + estimate time.
 
         Returns dict with:
@@ -285,9 +281,9 @@ Title: {title}{desc}"""
             return "No work logs found for this period."
 
         lines = "\n".join(
-            f"- [{l.get('source','?')}] {l.get('title','')} "
-            f"({l.get('activity_type','')}) — {l.get('time_spent_minutes',0)}m"
-            for l in logs
+            f"- [{entry.get('source', '?')}] {entry.get('title', '')} "
+            f"({entry.get('activity_type', '')}) — {entry.get('time_spent_minutes', 0)}m"
+            for entry in logs
         )
 
         prompt = f"""You are a work log analyst. Given {period} work logs, generate a concise professional summary covering:
@@ -313,10 +309,10 @@ WORK LOGS:
             return "No work logs available to analyze."
 
         lines = "\n".join(
-            f"- [{l.get('source','?')}] {l.get('title','')} | "
-            f"{l.get('activity_timestamp','')[:10]} | "
-            f"{l.get('project','')} | {l.get('time_spent_minutes',0)}m"
-            for l in logs
+            f"- [{entry.get('source', '?')}] {entry.get('title', '')} | "
+            f"{entry.get('activity_timestamp', '')[:10]} | "
+            f"{entry.get('project', '')} | {entry.get('time_spent_minutes', 0)}m"
+            for entry in logs
         )
 
         prompt = (

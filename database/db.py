@@ -1,17 +1,13 @@
 """Database engine & session factory."""
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from config import config
 
 # SQLite cần check_same_thread=False vì FastAPI + scheduler
 # có thể truy cập DB từ nhiều thread khác nhau.
-connect_args = (
-    {"check_same_thread": False}
-    if "sqlite" in config.DATABASE_URL
-    else {}
-)
+connect_args = {"check_same_thread": False} if "sqlite" in config.DATABASE_URL else {}
 
 engine = create_engine(
     config.DATABASE_URL,

@@ -3,8 +3,10 @@
 Cho phép người dùng cấu hình AI trực tiếp từ UI mà không cần sửa .env.
 """
 
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -12,7 +14,9 @@ from sqlalchemy.orm import Session
 from database.db import get_db
 from database.models import AppSetting
 from services.ai_service import AIService
+from services.settings_service import mask_api_key
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
@@ -53,19 +57,16 @@ def get_settings(db: Session = Depends(get_db)):
     result: dict[str, str] = {}
     for s in rows:
         if s.key == "ai_api_key" and s.value:
-            v = s.value
-            result[s.key] = v[:8] + ("****" if len(v) > 8 else "***")
+            result[s.key] = mask_api_key(s.value)
         else:
             result[s.key] = s.value or ""
     return SettingsOut(settings=result)
 
 
 @router.put("")
-def update_settings(
-    items: list[SettingItem], db: Session = Depends(get_db)
-):
+def update_settings(items: list[SettingItem], db: Session = Depends(get_db)):
     """Cập nhật settings. Gửi mảng {key, value}."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     for item in items:
         setting = db.query(AppSetting).filter(AppSetting.key == item.key).first()
         if setting:
@@ -76,11 +77,7 @@ def update_settings(
 
         # Nếu disable AI, clear api_key để tránh leak trong DB
         if item.key == "ai_enabled" and item.value != "true":
-            key_setting = (
-                db.query(AppSetting)
-                .filter(AppSetting.key == "ai_api_key")
-                .first()
-            )
+            key_setting = db.query(AppSetting).filter(AppSetting.key == "ai_api_key").first()
             if key_setting:
                 db.delete(key_setting)
 
@@ -92,9 +89,7 @@ def update_settings(
 async def test_connection(data: TestConnectionIn):
     """Test kết nối tới LLM provider với settings hiện tại."""
     if not data.api_key:
-        return TestConnectionOut(
-            status="error", message="API key is required"
-        )
+        return TestConnectionOut(status="error", message="API key is required")
 
     try:
         svc = AIService(
@@ -138,14 +133,6 @@ async def test_connection(data: TestConnectionIn):
             message=f"HTTP {e.response.status_code}: {e.response.text[:200]}",
         )
     except httpx.RequestError as e:
-        return TestConnectionOut(
-            status="error", message=f"Connection failed: {e}"
-        )
+        return TestConnectionOut(status="error", message=f"Connection failed: {e}")
     except Exception as e:
-        return TestConnectionOut(
-            status="error", message=str(e)[:300]
-        )
-
-
-# Need httpx for error types in test_connection
-import httpx
+        return TestConnectionOut(status="error", message=str(e)[:300])

@@ -18,40 +18,47 @@ Auto-collect & intelligently process work logs from multiple sources.
 Mở http://localhost:8765
 """
 
-import sys
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from config import config
+from core import register_exception_handlers
 from database.db import init_db
 from pollers.scheduler import start_scheduler, stop_scheduler
 
-# ─── App creation ─────────────────────────────────────
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Khởi tạo DB + scheduler khi app start, dọn dẹp khi stop."""
+    logger.info("Starting Work Log Harness v%s", config.APP_NAME)
     print("\n" + "=" * 50)
     print("  🔄 Work Log Harness")
     print("=" * 50)
 
     # 1. Init database
+    logger.info("Initializing database...")
     print("\n📦 Initializing database...")
     init_db()
     print("  ✓ Database ready")
 
     # 2. Start background pollers
+    logger.info("Starting pollers...")
     print("\n⏱  Starting pollers...")
     start_scheduler()
 
     yield  # App running...
 
     # 3. Cleanup
+    logger.info("Shutting down...")
     print("\n⏹  Shutting down...")
     stop_scheduler()
+    logger.info("Goodbye!")
     print("  ✓ Goodbye!\n")
 
 
@@ -62,18 +69,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# ─── Register exception handlers ─────────────────────
+register_exception_handlers(app)
+
 # ─── Static files ─────────────────────────────────────
 static_dir = Path(__file__).resolve().parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 # ─── Routers ──────────────────────────────────────────
-from routers import web as web_router
-from routers import logs as logs_router
-from routers import export as export_router
-from routers import settings as settings_router
 from routers import ai as ai_router
+from routers import export as export_router
+from routers import logs as logs_router
 from routers import poll as poll_router
+from routers import settings as settings_router
+from routers import web as web_router
 
 app.include_router(web_router.router)
 app.include_router(logs_router.router)
@@ -86,11 +96,9 @@ app.include_router(poll_router.router)
 # ─── Entry point ──────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    from config import config
 
-    print(
-        f"\n🚀 Starting server at http://{config.HOST}:{config.PORT}\n"
-    )
+    logger.info("Starting server at http://%s:%s", config.HOST, config.PORT)
+    print(f"\n🚀 Starting server at http://{config.HOST}:{config.PORT}\n")
     uvicorn.run(
         "app:app",
         host=config.HOST,

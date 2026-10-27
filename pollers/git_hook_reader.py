@@ -5,14 +5,17 @@ Mỗi lần commit local, post-commit hook sẽ ghi một dòng JSON vào
 vào bảng work_logs.
 """
 
+import contextlib
 import json
-import os
-from datetime import datetime
+import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
+from config import config
 from database.db import SessionLocal
 from database.models import WorkLog
-from config import config
+
+logger = logging.getLogger("pollers.git_hook")
 
 
 def _get_processed_count() -> int:
@@ -32,10 +35,8 @@ def _save_processed_count(count: int) -> None:
     state_file = Path(__file__).resolve().parent.parent / "poller_state.json"
     data = {}
     if state_file.exists():
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             data = json.loads(state_file.read_text())
-        except json.JSONDecodeError:
-            pass
     data["git_hook_processed"] = count
     state_file.write_text(json.dumps(data, indent=2))
 
@@ -74,7 +75,7 @@ def read_git_hooks() -> None:
             try:
                 activity_ts = datetime.fromisoformat(ts)
             except (ValueError, TypeError):
-                activity_ts = datetime.utcnow()
+                activity_ts = datetime.now(timezone.utc).replace(tzinfo=None)
 
             time_minutes = entry.get("time_spent_minutes", 0)
             try:

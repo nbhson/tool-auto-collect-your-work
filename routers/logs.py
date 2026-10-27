@@ -1,17 +1,20 @@
 """REST API cho WorkLog CRUD + thống kê."""
 
-from datetime import datetime
-from typing import Optional
+import logging
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Query, Depends, HTTPException
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from core.exceptions import NotFoundError, ValidationError
 from database.db import get_db
-from database.models import WorkLog, AppSetting
+from database.models import WorkLog
 from services.ai_service import AIService
+from services.settings_service import get_setting
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
 
@@ -20,27 +23,31 @@ router = APIRouter(prefix="/api/logs", tags=["logs"])
 
 class WorkLogCreate(BaseModel):
     """Schema cho manual entry form."""
+
     title: str = Field(..., min_length=1, max_length=500)
-    description: Optional[str] = None
-    activity_type: str = Field(default="other")
-    project: Optional[str] = None
-    url: Optional[str] = None
-    activity_timestamp: Optional[datetime] = None
-    time_spent_minutes: int = Field(default=0, ge=0)
+    description: str | None = Field(None, max_length=10000)
+    activity_type: str = Field(default="other", max_length=50)
+    project: str | None = Field(None, max_length=100)
+    url: str | None = Field(None, max_length=1000)
+    activity_timestamp: datetime | None = None
+    time_spent_minutes: int = Field(default=0, ge=0, le=60 * 24 * 30)
+
+    model_config = {"str_strip_whitespace": True}
 
 
 class WorkLogOut(BaseModel):
     """Schema trả về cho client."""
+
     id: int
     source: str
     activity_type: str
     title: str
-    description: Optional[str] = None
-    project: Optional[str] = None
-    url: Optional[str] = None
+    description: str | None = None
+    project: str | None = None
+    url: str | None = None
     activity_timestamp: datetime
     time_spent_minutes: int
-    external_id: Optional[str] = None
+    external_id: str | None = None
     created_at: datetime
 
     class Config:
@@ -49,6 +56,7 @@ class WorkLogOut(BaseModel):
 
 class WorkLogList(BaseModel):
     """Kết quả phân trang."""
+
     items: list[WorkLogOut]
     total: int
     page: int
@@ -57,6 +65,7 @@ class WorkLogList(BaseModel):
 
 class StatsOut(BaseModel):
     """Thống kê nhanh."""
+
     total_logs: int
     total_time_hours: float
     jira_logs: int
@@ -73,16 +82,19 @@ class StatsOut(BaseModel):
 
 @router.get("", response_model=WorkLogList)
 def list_logs(
-    source: Optional[str] = Query(None, description="Filter by source"),
-    activity_type: Optional[str] = Query(None, description="Filter by activity type"),
-    project: Optional[str] = Query(None, description="Filter by project"),
-    date_from: Optional[str] = Query(None, alias="from"),
-    date_to: Optional[str] = Query(None, alias="to"),
-    search: Optional[str] = Query(None, description="Search in title/description"),
+    source: str | None = Query(None, description="Filter by source"),
+    activity_type: str | None = Query(None, description="Filter by activity type"),
+    project: str | None = Query(None, description="Filter by project"),
+    date_from: str | None = Query(None, alias="from"),
+    date_to: str | None = Query(None, alias="to"),
+    search: str | None = Query(None, description="Search in title/description"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
-    sort_by: str = Query("activity_timestamp", regex="^(activity_timestamp|created_at|source|title)$"),
-    sort_order: str = Query("desc", regex="^(asc|desc)$"),
+    sort_by: str = Query(
+        "activity_timestamp",
+        pattern="^(activity_timestamp|created_at|source|title)$",
+    ),
+    sort_order: str = Query("desc", pattern="^(asc|desc)$"),
     db: Session = Depends(get_db),
 ):
     """Lấy danh sách work logs với bộ lọc và phân trang."""
@@ -98,14 +110,16 @@ def list_logs(
         try:
             dt_from = datetime.fromisoformat(date_from)
             q = q.filter(WorkLog.activity_timestamp >= dt_from)
-        except ValueError:
-            pass
+        except ValueError as err:
+            raise ValidationError(
+                f"Invalid date_from format: {date_from}. Use ISO format."
+            ) from err
     if date_to:
         try:
             dt_to = datetime.fromisoformat(date_to)
             q = q.filter(WorkLog.activity_timestamp <= dt_to)
-        except ValueError:
-            pass
+        except ValueError as err:
+            raise ValidationError(f"Invalid date_to format: {date_to}. Use ISO format.") from err
     if search:
         search_term = f"%{search}%"
         q = q.filter(
@@ -116,13 +130,11 @@ def list_logs(
 
     total = q.count()
 
-    # Sorting
     sort_col = getattr(WorkLog, sort_by, WorkLog.activity_timestamp)
     if sort_order == "desc":
         sort_col = sort_col.desc()
     q = q.order_by(sort_col)
 
-    # Pagination
     offset = (page - 1) * page_size
     items = q.offset(offset).limit(page_size).all()
 
@@ -132,11 +144,6 @@ def list_logs(
         page=page,
         page_size=page_size,
     )
-
-
-def _get_setting(db: Session, key: str) -> str:
-    s = db.query(AppSetting).filter(AppSetting.key == key).first()
-    return s.value if s else ""
 
 
 @router.post("", response_model=WorkLogOut, status_code=201)
@@ -149,9 +156,9 @@ async def create_log(entry: WorkLogCreate, db: Session = Depends(get_db)):
         description=entry.description,
         project=entry.project,
         url=entry.url,
-        activity_timestamp=entry.activity_timestamp or datetime.utcnow(),
+        activity_timestamp=entry.activity_timestamp or datetime.now(timezone.utc).replace(tzinfo=None),
         time_spent_minutes=entry.time_spent_minutes,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
     )
     db.add(log)
     db.commit()
@@ -159,14 +166,14 @@ async def create_log(entry: WorkLogCreate, db: Session = Depends(get_db)):
 
     # Auto-enhance nếu AI harness đang enabled
     try:
-        enabled = _get_setting(db, "ai_enabled")
-        api_key = _get_setting(db, "ai_api_key")
+        enabled = get_setting(db, "ai_enabled")
+        api_key = get_setting(db, "ai_api_key")
         if enabled == "true" and api_key:
             svc = AIService(
-                provider=_get_setting(db, "ai_provider") or "openai",
+                provider=get_setting(db, "ai_provider") or "openai",
                 api_key=api_key,
-                base_url=_get_setting(db, "ai_base_url"),
-                model=_get_setting(db, "ai_model"),
+                base_url=get_setting(db, "ai_base_url"),
+                model=get_setting(db, "ai_model"),
             )
             result = await svc.enhance_log(
                 title=log.title,
@@ -183,7 +190,8 @@ async def create_log(entry: WorkLogCreate, db: Session = Depends(get_db)):
                 db.commit()
                 db.refresh(log)
     except Exception:
-        pass  # Silent — không block user nếu AI lỗi
+        # Silent — không block user nếu AI lỗi
+        logger.exception("AI auto-enhance failed for log %s", log.id)
 
     return WorkLogOut.model_validate(log)
 
@@ -193,7 +201,7 @@ def delete_log(log_id: int, db: Session = Depends(get_db)):
     """Xoá một work log entry."""
     log = db.query(WorkLog).filter(WorkLog.id == log_id).first()
     if not log:
-        raise HTTPException(status_code=404, detail="Work log not found")
+        raise NotFoundError("Work log not found")
     db.delete(log)
     db.commit()
 
@@ -207,14 +215,14 @@ def update_log(
     """Cập nhật một work log (vd: sửa time spent)."""
     log = db.query(WorkLog).filter(WorkLog.id == log_id).first()
     if not log:
-        raise HTTPException(status_code=404, detail="Work log not found")
+        raise NotFoundError("Work log not found")
 
     log.title = updates.title
     log.description = updates.description
     log.activity_type = updates.activity_type
     log.project = updates.project
     log.url = updates.url
-    log.activity_timestamp = updates.activity_timestamp or datetime.utcnow()
+    log.activity_timestamp = updates.activity_timestamp or datetime.now(timezone.utc).replace(tzinfo=None)
     log.time_spent_minutes = updates.time_spent_minutes
 
     db.commit()
@@ -225,36 +233,21 @@ def update_log(
 @router.get("/stats", response_model=StatsOut)
 def get_stats(db: Session = Depends(get_db)):
     """Thống kê nhanh cho dashboard."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = now.replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    week_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     # Lùi về thứ 2 (Monday)
-    week_start = week_start.replace(
-        day=week_start.day - week_start.weekday()
-    )
+    week_start = week_start.replace(day=week_start.day - week_start.weekday())
 
     total = db.query(func.count(WorkLog.id)).scalar() or 0
-    total_time = db.query(
-        func.coalesce(func.sum(WorkLog.time_spent_minutes), 0)
-    ).scalar() or 0
+    total_time = db.query(func.coalesce(func.sum(WorkLog.time_spent_minutes), 0)).scalar() or 0
 
     def count_by_source(source: str) -> int:
-        return (
-            db.query(func.count(WorkLog.id))
-            .filter(WorkLog.source == source)
-            .scalar()
-            or 0
-        )
+        return db.query(func.count(WorkLog.id)).filter(WorkLog.source == source).scalar() or 0
 
     def time_since(start: datetime) -> float:
         result = (
-            db.query(
-                func.coalesce(
-                    func.sum(WorkLog.time_spent_minutes), 0
-                )
-            )
+            db.query(func.coalesce(func.sum(WorkLog.time_spent_minutes), 0))
             .filter(WorkLog.activity_timestamp >= start)
             .scalar()
             or 0

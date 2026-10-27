@@ -4,46 +4,45 @@ Mỗi endpoint dùng LLM để xử lý thông minh dữ liệu work log.
 Settings (provider, key, model) được lấy từ AppSetting trong DB.
 """
 
+import contextlib
+import logging
 from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from core.exceptions import NotFoundError
 from database.db import get_db
-from database.models import WorkLog, AppSetting
+from database.models import WorkLog
 from services.ai_service import AIService
+from services.settings_service import get_setting
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 
 # ─── Helpers ───────────────────────────────────────────
 
 
-def _get_setting(db: Session, key: str) -> str:
-    s = db.query(AppSetting).filter(AppSetting.key == key).first()
-    return s.value if s else ""
-
-
 def _resolve_service(db: Session) -> AIService:
-    enabled = _get_setting(db, "ai_enabled")
+    enabled = get_setting(db, "ai_enabled")
     if enabled != "true":
-        raise HTTPException(
-            status_code=400,
-            detail="AI is disabled. Go to ⚙️ Settings and configure your LLM provider.",
+        from core.exceptions import ConfigurationError
+
+        raise ConfigurationError(
+            "AI is disabled. Go to ⚙️ Settings and configure your LLM provider."
         )
-    api_key = _get_setting(db, "ai_api_key")
+    api_key = get_setting(db, "ai_api_key")
     if not api_key:
-        raise HTTPException(
-            status_code=400,
-            detail="API key not configured. Go to ⚙️ Settings to set it up.",
-        )
+        from core.exceptions import ConfigurationError
+
+        raise ConfigurationError("API key not configured. Go to ⚙️ Settings to set it up.")
     return AIService(
-        provider=_get_setting(db, "ai_provider") or "openai",
+        provider=get_setting(db, "ai_provider") or "openai",
         api_key=api_key,
-        base_url=_get_setting(db, "ai_base_url"),
-        model=_get_setting(db, "ai_model"),
+        base_url=get_setting(db, "ai_base_url"),
+        model=get_setting(db, "ai_model"),
     )
 
 
@@ -60,7 +59,7 @@ class ClassifyOut(BaseModel):
 
 
 class BatchClassifyIn(BaseModel):
-    log_ids: Optional[list[int]] = None
+    log_ids: list[int] | None = None
 
 
 class BatchClassifyOut(BaseModel):
@@ -68,8 +67,8 @@ class BatchClassifyOut(BaseModel):
 
 
 class SummaryIn(BaseModel):
-    date_from: Optional[str] = None
-    date_to: Optional[str] = None
+    date_from: str | None = None
+    date_to: str | None = None
     period: str = "daily"
 
 
@@ -80,8 +79,8 @@ class SummaryOut(BaseModel):
 
 class AnalyzeIn(BaseModel):
     query: str
-    date_from: Optional[str] = None
-    date_to: Optional[str] = None
+    date_from: str | None = None
+    date_to: str | None = None
 
 
 class AnalyzeOut(BaseModel):
@@ -110,7 +109,7 @@ async def classify_single(log_id: int, db: Session = Depends(get_db)):
     """✨ Phân loại một work log entry bằng AI."""
     log = db.query(WorkLog).filter(WorkLog.id == log_id).first()
     if not log:
-        raise HTTPException(status_code=404, detail="Log not found")
+        raise NotFoundError(f"Log with id={log_id} not found")
 
     svc = _resolve_service(db)
     result = await svc.classify_log(log.title, log.description or "")
@@ -136,9 +135,7 @@ async def classify_single(log_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/classify", response_model=BatchClassifyOut)
-async def classify_batch(
-    req: BatchClassifyIn, db: Session = Depends(get_db)
-):
+async def classify_batch(req: BatchClassifyIn, db: Session = Depends(get_db)):
     """✨ Phân loại hàng loạt work logs (mặc định: tất cả manual entries chưa phân loại)."""
     q = db.query(WorkLog)
     if req.log_ids:
@@ -151,7 +148,7 @@ async def classify_batch(
     logs = q.order_by(WorkLog.activity_timestamp.desc()).limit(50).all()
 
     if not logs:
-        raise HTTPException(status_code=404, detail="No matching logs found to classify")
+        raise NotFoundError("No matching logs found to classify")
 
     svc = _resolve_service(db)
     results: list[ClassifyOut] = []
@@ -185,38 +182,26 @@ async def summarize(req: SummaryIn, db: Session = Depends(get_db)):
     """🤖 Tạo báo cáo tóm tắt work logs bằng AI."""
     q = db.query(WorkLog)
     if req.date_from:
-        try:
-            q = q.filter(
-                WorkLog.activity_timestamp
-                >= datetime.fromisoformat(req.date_from)
-            )
-        except ValueError:
-            pass
+        with contextlib.suppress(ValueError):
+            q = q.filter(WorkLog.activity_timestamp >= datetime.fromisoformat(req.date_from))
     if req.date_to:
-        try:
-            q = q.filter(
-                WorkLog.activity_timestamp
-                <= datetime.fromisoformat(req.date_to)
-            )
-        except ValueError:
-            pass
+        with contextlib.suppress(ValueError):
+            q = q.filter(WorkLog.activity_timestamp <= datetime.fromisoformat(req.date_to))
 
-    logs = (
-        q.order_by(WorkLog.activity_timestamp.asc()).limit(150).all()
-    )
+    logs = q.order_by(WorkLog.activity_timestamp.asc()).limit(150).all()
 
     logs_data = [
         {
-            "source": l.source,
-            "title": l.title,
-            "activity_type": l.activity_type,
-            "project": l.project,
-            "time_spent_minutes": l.time_spent_minutes,
+            "source": log_entry.source,
+            "title": log_entry.title,
+            "activity_type": log_entry.activity_type,
+            "project": log_entry.project,
+            "time_spent_minutes": log_entry.time_spent_minutes,
             "activity_timestamp": (
-                l.activity_timestamp.isoformat() if l.activity_timestamp else ""
+                log_entry.activity_timestamp.isoformat() if log_entry.activity_timestamp else ""
             ),
         }
-        for l in logs
+        for log_entry in logs
     ]
 
     svc = _resolve_service(db)
@@ -230,39 +215,27 @@ async def analyze(req: AnalyzeIn, db: Session = Depends(get_db)):
     """💬 Trả lời câu hỏi natural language về work logs."""
     q = db.query(WorkLog)
     if req.date_from:
-        try:
-            q = q.filter(
-                WorkLog.activity_timestamp
-                >= datetime.fromisoformat(req.date_from)
-            )
-        except ValueError:
-            pass
+        with contextlib.suppress(ValueError):
+            q = q.filter(WorkLog.activity_timestamp >= datetime.fromisoformat(req.date_from))
     if req.date_to:
-        try:
-            q = q.filter(
-                WorkLog.activity_timestamp
-                <= datetime.fromisoformat(req.date_to)
-            )
-        except ValueError:
-            pass
+        with contextlib.suppress(ValueError):
+            q = q.filter(WorkLog.activity_timestamp <= datetime.fromisoformat(req.date_to))
 
-    logs = (
-        q.order_by(WorkLog.activity_timestamp.desc()).limit(200).all()
-    )
+    logs = q.order_by(WorkLog.activity_timestamp.desc()).limit(200).all()
 
     logs_data = [
         {
-            "source": l.source,
-            "title": l.title,
-            "description": l.description,
-            "activity_type": l.activity_type,
-            "project": l.project,
-            "time_spent_minutes": l.time_spent_minutes,
+            "source": log_entry.source,
+            "title": log_entry.title,
+            "description": log_entry.description,
+            "activity_type": log_entry.activity_type,
+            "project": log_entry.project,
+            "time_spent_minutes": log_entry.time_spent_minutes,
             "activity_timestamp": (
-                l.activity_timestamp.isoformat() if l.activity_timestamp else ""
+                log_entry.activity_timestamp.isoformat() if log_entry.activity_timestamp else ""
             ),
         }
-        for l in logs
+        for log_entry in logs
     ]
 
     svc = _resolve_service(db)
@@ -276,7 +249,7 @@ async def enhance_single(log_id: int, db: Session = Depends(get_db)):
     """🪄 Rewrite description + estimate time cho 1 work log."""
     log = db.query(WorkLog).filter(WorkLog.id == log_id).first()
     if not log:
-        raise HTTPException(status_code=404, detail="Log not found")
+        raise NotFoundError(f"Log with id={log_id} not found")
 
     svc = _resolve_service(db)
     result = await svc.enhance_log(
@@ -304,9 +277,7 @@ async def enhance_single(log_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/enhance", response_model=BatchEnhanceOut)
-async def enhance_batch(
-    req: BatchClassifyIn, db: Session = Depends(get_db)
-):
+async def enhance_batch(req: BatchClassifyIn, db: Session = Depends(get_db)):
     """🪄 Batch rewrite descriptions + estimate time."""
     q = db.query(WorkLog)
     if req.log_ids:
@@ -320,7 +291,7 @@ async def enhance_batch(
     logs = q.order_by(WorkLog.activity_timestamp.desc()).limit(50).all()
 
     if not logs:
-        raise HTTPException(status_code=404, detail="No matching logs found")
+        raise NotFoundError("No matching logs found")
 
     svc = _resolve_service(db)
     results: list[EnhanceOut] = []

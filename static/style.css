@@ -2015,3 +2015,58 @@ body {
     gap: var(--space-2);
   }
 }
+
+/* ═══════════════════════════════════════════════════════
+   Accessibility
+   ═══════════════════════════════════════════════════════ */
+
+/* Visible focus ring for keyboard navigation */
+:focus-visible {
+  outline: 2px solid var(--accent, #4f46e5);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Screen-reader-only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Respect users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Skip link — hidden until focused */
+.skip-link {
+  position: absolute;
+  top: -48px;
+  left: 8px;
+  z-index: 2000;
+  padding: 8px 16px;
+  background: var(--accent, #4f46e5);
+  color: #fff;
+  border-radius: 0 0 8px 8px;
+  text-decoration: none;
+  font-weight: 600;
+  transition: top 0.2s ease;
+}
+
+.skip-link:focus {
+  top: 0;
+}

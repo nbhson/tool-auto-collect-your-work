@@ -46,6 +46,7 @@
 - [Tích hợp Git Hooks](#-tích-hợp-git-hooks)
 - [API Reference](#-api-reference)
 - [Keyboard Shortcuts](#-keyboard-shortcuts)
+- [Development](#-development)
 - [Giấy phép](#-giấy-phép)
 
 ---
@@ -233,24 +234,35 @@ flowchart LR
 tool-auto-logwork/
 ├── app.py                      # Entry point — FastAPI app
 ├── config.py                   # Env config (server, DB, GitHub, Jira, Bitbucket)
-├── requirements.txt
+├── requirements.txt            # Runtime dependencies
+├── requirements-dev.txt        # Dev: pytest, ruff, jinja2
+├── pyproject.toml              # ruff + pytest config
 ├── .env.example
 ├── .gitignore
+├── CHANGELOG.md
 ├── README.md
+│
+├── core/
+│   ├── __init__.py             # Exception handlers registration
+│   ├── exceptions.py          # Custom exceptions: AppError, NotFoundError, ValidationError,
+│   │                            #   ExternalServiceError, ConfigurationError, AIServiceError
+│   └── logging_config.py      # Structured JSON logging, configurable LOG_LEVEL
 │
 ├── database/
 │   ├── db.py                   # SQLAlchemy engine, SessionLocal, init_db()
 │   └── models.py               # WorkLog + AppSetting models
 │
 ├── services/
-│   └── ai_service.py           # 🤖 AI Harness Core — provider-agnostic LLM wrapper
-│                                #   • classify_log()    — phân loại work entry
-│                                #   • generate_summary()— tóm tắt logs
-│                                #   • analyze_query()   — chat với work logs
-│                                #   • list_models()     — fetch models từ API
+│   ├── ai_service.py           # 🤖 AI Harness Core — provider-agnostic LLM wrapper
+│   │                            #   • classify_log()    — phân loại work entry
+│   │                            #   • generate_summary()— tóm tắt logs
+│   │                            #   • analyze_query()   — chat với work logs
+│   │                            #   • list_models()     — fetch models từ API
+│   └── settings_service.py     # Deduplicated settings lookup with caching
 │
 ├── pollers/
 │   ├── scheduler.py            # APScheduler — lifecycle (immediate startup)
+│   ├── http.py                 # Shared request_with_retry() with exponential backoff
 │   ├── github.py               # 🟣 GitHub Poller — Events + Search Commits
 │   ├── jira.py                 # 🔵 Jira poller (Cloud API v3 — all activity types)
 │   ├── bitbucket.py            # 🟢 Bitbucket poller (Server API v1.0 + Cloud v2)
@@ -258,18 +270,39 @@ tool-auto-logwork/
 │
 ├── routers/
 │   ├── web.py                  # GET / → render index.html
-│   ├── logs.py                 # CRUD: /api/logs
-│   ├── export.py               # Export: /api/export/excel
+│   ├── logs.py                 # CRUD: /api/logs (validators, 422 on bad dates)
+│   ├── export.py               # Export: /api/export/excel (Depends(get_db))
 │   ├── settings.py             # ⚙️ Settings: /api/settings
 │   ├── ai.py                   # 🤖 AI: /api/ai/classify, /summarize, /analyze
-│   └── poll.py                 # 🔄 Poll Now: POST /api/poll
+│   └── poll.py                 # 🔄 Poll All: POST /api/poll (all sources)
 │
 ├── templates/
 │   └── index.html              # Enterprise SPA — sidebar, top bar, stats, table, AI panels
 │
 ├── static/
-│   ├── style.css               # Premium design system (~650 lines, light/dark theme)
-│   └── script.js               # JS — sidebar, theme, cmd palette, AI, table, poll
+│   ├── style.css               # Premium design system (~2050 lines, light/dark theme, a11y)
+│   └── js/                     # ES modules (no build step, <script type=module>)
+│       ├── main.js             # Entry point — init, keyboard shortcuts, cmd palette
+│       ├── api.js              # fetch wrapper with AbortController timeout + retry
+│       ├── state.js            # Global state (page, filters, sort, editingId)
+│       ├── toast.js            # Toast notification helpers
+│       ├── loading.js          # withLoading / withButtonLoading helpers
+│       ├── format.js           # formatDate, badgeClass, activityTypeLabel, escapeHtml
+│       ├── stats.js            # renderStats, renderSparkline, animateCounter
+│       ├── table.js            # renderSkeleton, renderTable, renderPagination, toggleDesc
+│       ├── data.js             # loadData, refreshPage, startAutoRefresh
+│       ├── theme.js            # loadTheme, toggleTheme (localStorage + system preference)
+│       ├── settings.js         # loadSettings, onProviderChange, handleSettingsSave, etc.
+│       └── ai.js               # handleClassifySingle, generateSummary, sendChatMessage, etc.
+│
+├── tests/                      # 53 pytest tests (routers, pollers, exceptions, export)
+│   ├── conftest.py
+│   ├── test_logs.py
+│   ├── test_settings.py
+│   ├── test_poll.py
+│   ├── test_export.py
+│   ├── test_exceptions.py
+│   └── test_pollers.py
 │
 └── hooks/
     ├── setup.sh                # Cài git hooks
@@ -539,7 +572,11 @@ Poll REST API v3 mỗi N phút với dual strategy:
 1. **Events API** (`/users/{username}/events?per_page=100`) — lấy tất cả events gần đây
 2. **Search Commits API** (`/search/commits?author={username}&committer-date>{since}`) — fallback khi events không đủ
 
-Dedup bằng `external_id = f"github_commit_{sha}"` giúp không trùng lặp dữ liệu.
+Dedup bằng `external_id` giúp không trùng lặp dữ liệu:
+- Commits: `github_commit_{sha}` (SHA is globally unique)
+- PRs: `github_pr_{owner}/{repo}_{number}` (includes repo to avoid collisions across repos)
+- Issues: `github_issue_{owner}/{repo}_{number}` (includes repo for same reason)
+- Comments: `github_comment_{id}` (comment IDs are globally unique)
 
 ---
 
@@ -714,6 +751,56 @@ Mỗi lần commit → ghi JSON vào `~/.worklog_git_hooks.jsonl` → app đọc
 | **Esc** | Đóng Command Palette |
 | **⌘⇧R** / **Ctrl+Shift+R** | Sync all sources (Poll Now) |
 | **⌘⌥D** / **Ctrl+Alt+D** | Toggle dark mode (trong command palette) |
+
+---
+
+## 🧪 Development
+
+### Tests
+
+```bash
+# Khuyến nghị: dùng virtualenv với Python 3.12
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt -r requirements-dev.txt
+
+# Chạy toàn bộ test suite (53 tests)
+python -m pytest tests/ -q
+
+# Chạy 1 file / 1 test cụ thể
+python -m pytest tests/test_logs.py -q
+python -m pytest tests/test_poll.py -k "test_poll_disabled" -v
+```
+
+> ⚠️ Python 3.13+ hiện không chạy được do `httpx 0.28.1` phụ thuộc module `cgi` đã bị xóa — dùng Python 3.12.
+
+### Lint & Format (Python)
+
+```bash
+python -m ruff check .            # lint
+python -m ruff check . --fix      # lint + autofix
+python -m ruff format .           # format
+python -m ruff format --check .   # kiểm tra format (CI)
+```
+
+### Lint & Format (Frontend)
+
+```bash
+npm install                       # cài ESLint + Prettier (dev-only, không build step)
+npm run lint                      # ESLint check static/js/
+npm run lint:fix                  # ESLint + autofix
+npm run format                    # Prettier format JS/CSS/HTML
+npm run format:check              # kiểm tra format
+```
+
+### Frontend
+
+Frontend là **vanilla JS ES modules** (không cần build step). `templates/index.html` tải
+`static/js/main.js` qua `<script type="module">`. Các handler dùng trong inline `onclick`
+được expose qua `window.*` ở đầu `main.js`.
+
+Khi sửa JS/CSS, tăng `?v=` cache-bust param trong `templates/index.html`.
+
+Chi tiết thay đổi theo từng phiên bản: xem [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
