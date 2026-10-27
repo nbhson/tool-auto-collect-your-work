@@ -1,6 +1,6 @@
 """Unit tests for /api/export endpoints."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 
 from openpyxl import load_workbook
@@ -62,7 +62,7 @@ class TestExportExcel:
                 source="github",
                 activity_type="commit",
                 title="GH log",
-                activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
             )
         )
         db_session.add(
@@ -70,7 +70,7 @@ class TestExportExcel:
                 source="manual",
                 activity_type="meeting",
                 title="Manual log",
-                activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
             )
         )
         db_session.commit()
@@ -94,7 +94,7 @@ class TestExportExcel:
                 source="github",
                 activity_type="commit",
                 title="GH commit",
-                activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
             )
         )
         db_session.add(
@@ -102,7 +102,7 @@ class TestExportExcel:
                 source="manual",
                 activity_type="meeting",
                 title="Manual entry",
-                activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
             )
         )
         db_session.commit()

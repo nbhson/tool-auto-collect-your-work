@@ -128,7 +128,7 @@ def poll_jira() -> None:
 
         db = SessionLocal()
         try:
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            now = datetime.now(UTC).replace(tzinfo=None)
             new_count = 0
 
             for issue in data.get("issues", []):
@@ -271,7 +271,7 @@ def poll_jira() -> None:
         finally:
             db.close()
 
-        _save_last_run(datetime.now(timezone.utc).replace(tzinfo=None))
+        _save_last_run(datetime.now(UTC).replace(tzinfo=None))
 
     except httpx.HTTPStatusError as e:
         logger.error(

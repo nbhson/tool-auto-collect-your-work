@@ -1,6 +1,6 @@
 """Unit tests for custom exceptions and error handling."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from core.exceptions import (
     AIServiceError,
@@ -82,7 +82,7 @@ class TestExceptionHTTPResponses:
             source="manual",
             activity_type="meeting",
             title="Test",
-            activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+            activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
         )
         db_session.add(log)
         db_session.commit()

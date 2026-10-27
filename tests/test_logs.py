@@ -1,6 +1,6 @@
 """Unit tests for /api/logs endpoints."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class TestListLogs:
@@ -25,7 +25,7 @@ class TestListLogs:
                 source="manual",
                 activity_type="meeting",
                 title="Test meeting",
-                activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
                 time_spent_minutes=30,
             )
         )
@@ -47,7 +47,7 @@ class TestListLogs:
                 source="github",
                 activity_type="commit",
                 title="GH commit",
-                activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
             )
         )
         db_session.add(
@@ -55,7 +55,7 @@ class TestListLogs:
                 source="jira",
                 activity_type="comment",
                 title="Jira comment",
-                activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
             )
         )
         db_session.commit()
@@ -76,7 +76,7 @@ class TestListLogs:
                     source="manual",
                     activity_type="other",
                     title=f"Log {i}",
-                    activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                    activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
                 )
             )
         db_session.commit()
@@ -240,7 +240,7 @@ class TestGetStats:
                 source="github",
                 activity_type="commit",
                 title="GH commit",
-                activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
                 time_spent_minutes=60,
             )
         )
@@ -249,7 +249,7 @@ class TestGetStats:
                 source="manual",
                 activity_type="meeting",
                 title="Meeting",
-                activity_timestamp=datetime.now(timezone.utc).replace(tzinfo=None),
+                activity_timestamp=datetime.now(UTC).replace(tzinfo=None),
                 time_spent_minutes=30,
             )
         )

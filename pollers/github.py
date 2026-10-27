@@ -7,7 +7,7 @@ của user hiện tại từ tất cả repositories.
 import contextlib
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -82,7 +82,7 @@ def poll_github() -> None:
     base_api = "https://api.github.com"
 
     last_run = _get_last_run()
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
 
     if last_run is None:
         since = (now - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")

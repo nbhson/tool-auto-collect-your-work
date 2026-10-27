@@ -1,7 +1,7 @@
 """REST API cho WorkLog CRUD + thống kê."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -156,9 +156,9 @@ async def create_log(entry: WorkLogCreate, db: Session = Depends(get_db)):
         description=entry.description,
         project=entry.project,
         url=entry.url,
-        activity_timestamp=entry.activity_timestamp or datetime.now(timezone.utc).replace(tzinfo=None),
+        activity_timestamp=entry.activity_timestamp or datetime.now(UTC).replace(tzinfo=None),
         time_spent_minutes=entry.time_spent_minutes,
-        created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        created_at=datetime.now(UTC).replace(tzinfo=None),
     )
     db.add(log)
     db.commit()
@@ -222,7 +222,7 @@ def update_log(
     log.activity_type = updates.activity_type
     log.project = updates.project
     log.url = updates.url
-    log.activity_timestamp = updates.activity_timestamp or datetime.now(timezone.utc).replace(tzinfo=None)
+    log.activity_timestamp = updates.activity_timestamp or datetime.now(UTC).replace(tzinfo=None)
     log.time_spent_minutes = updates.time_spent_minutes
 
     db.commit()
@@ -233,7 +233,7 @@ def update_log(
 @router.get("/stats", response_model=StatsOut)
 def get_stats(db: Session = Depends(get_db)):
     """Thống kê nhanh cho dashboard."""
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     # Lùi về thứ 2 (Monday)

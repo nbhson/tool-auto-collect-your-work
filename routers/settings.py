@@ -4,7 +4,7 @@ Cho phép người dùng cấu hình AI trực tiếp từ UI mà không cần s
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter, Depends
@@ -66,7 +66,7 @@ def get_settings(db: Session = Depends(get_db)):
 @router.put("")
 def update_settings(items: list[SettingItem], db: Session = Depends(get_db)):
     """Cập nhật settings. Gửi mảng {key, value}."""
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     for item in items:
         setting = db.query(AppSetting).filter(AppSetting.key == item.key).first()
         if setting:

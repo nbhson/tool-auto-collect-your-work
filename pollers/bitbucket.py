@@ -160,7 +160,7 @@ def _poll_server(ws_info: dict) -> None:
         since = last_run - timedelta(minutes=2)
     since_epoch = _to_epoch_millis(since) or 0
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
 
     db = SessionLocal()
     try:
@@ -643,7 +643,7 @@ def _poll_cloud(workspace: str) -> None:
 
     db = SessionLocal()
     try:
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(UTC).replace(tzinfo=None)
         new_count = 0
 
         repos = _cloud_get_repos(auth_cred, workspace, base_url)
@@ -736,7 +736,7 @@ def _poll_cloud(workspace: str) -> None:
         if new_count > 0:
             db.commit()
 
-        _save_last_run(datetime.now(timezone.utc).replace(tzinfo=None))
+        _save_last_run(datetime.now(UTC).replace(tzinfo=None))
 
     except Exception as e:
         db.rollback()

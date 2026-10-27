@@ -4,7 +4,7 @@ Used by routers to avoid duplicating _get_setting logic.
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -21,7 +21,7 @@ def get_setting(db: Session, key: str) -> str:
 
 def set_setting(db: Session, key: str, value: str) -> None:
     """Upsert a single setting."""
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = datetime.now(UTC).replace(tzinfo=None)
     existing = db.query(AppSetting).filter(AppSetting.key == key).first()
     if existing:
         existing.value = value

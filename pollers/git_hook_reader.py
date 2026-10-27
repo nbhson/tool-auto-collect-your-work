@@ -8,7 +8,7 @@ vào bảng work_logs.
 import contextlib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from config import config
@@ -75,7 +75,7 @@ def read_git_hooks() -> None:
             try:
                 activity_ts = datetime.fromisoformat(ts)
             except (ValueError, TypeError):
-                activity_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+                activity_ts = datetime.now(UTC).replace(tzinfo=None)
 
             time_minutes = entry.get("time_spent_minutes", 0)
             try:
