@@ -6,7 +6,7 @@
 *Tự động thu thập, phân loại, và báo cáo thời gian làm việc từ GitHub, Jira, Bitbucket, Git, và Manual Entry*
 
 [![Python](https://img.shields.io/badge/Python-3.12%2B-2f5496?logo=python&logoColor=white)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.162-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![Bootstrap](https://img.shields.io/badge/Bootstrap-5.3-7952B3?logo=bootstrap&logoColor=white)](https://getbootstrap.com)
 [![License](https://img.shields.io/badge/License-MIT-6c757d)](LICENSE)
@@ -215,11 +215,12 @@ flowchart LR
 | Layer | Công nghệ | Mục đích |
 |-------|-----------|----------|
 | **Backend** | Python 3.12+ | Core logic |
-| **Web framework** | FastAPI 0.115 | REST API + lifespan events |
-| **ASGI server** | Uvicorn 0.34 | Serve app |
-| **ORM** | SQLAlchemy 2.0 | Database |
+| **Web framework** | FastAPI 0.162 | REST API + lifespan events |
+| **ASGI server** | Uvicorn 0.54 | Serve app |
+| **ORM** | SQLAlchemy 2.1 | Database |
 | **Database** | SQLite | Zero-config storage |
-| **Scheduler** | APScheduler 3.10 | Background polling jobs |
+| **Scheduler** | APScheduler 3.11 | Background polling jobs |
+| **Templating** | Jinja2 3.1 | Render trang chủ (runtime dependency) |
 | **HTTP client** | httpx 0.28 | GitHub, Jira, Bitbucket & LLM API calls |
 | **Excel export** | openpyxl 3.1 | .xlsx với styling |
 | **AI Engine** | Provider-agnostic | Gemini / OpenAI / Claude / OpenRouter / DeepSeek |
@@ -235,7 +236,7 @@ tool-auto-logwork/
 ├── app.py                      # Entry point — FastAPI app
 ├── config.py                   # Env config (server, DB, GitHub, Jira, Bitbucket)
 ├── requirements.txt            # Runtime dependencies
-├── requirements-dev.txt        # Dev: pytest, ruff, jinja2
+├── requirements-dev.txt        # Dev: pytest, pytest-asyncio, pytest-cov, ruff
 ├── pyproject.toml              # ruff + pytest config
 ├── .env.example
 ├── .gitignore
@@ -295,7 +296,7 @@ tool-auto-logwork/
 │       ├── settings.js         # loadSettings, onProviderChange, handleSettingsSave, etc.
 │       └── ai.js               # handleClassifySingle, generateSummary, sendChatMessage, etc.
 │
-├── tests/                      # 53 pytest tests (routers, pollers, exceptions, export)
+├── tests/                      # 77 pytest tests (app, config, routers, pollers, exceptions, export, utils)
 │   ├── conftest.py
 │   ├── test_logs.py
 │   ├── test_settings.py
@@ -763,7 +764,7 @@ Mỗi lần commit → ghi JSON vào `~/.worklog_git_hooks.jsonl` → app đọc
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 
-# Chạy toàn bộ test suite (53 tests)
+# Chạy toàn bộ test suite (77 tests)
 python -m pytest tests/ -q
 
 # Chạy 1 file / 1 test cụ thể
@@ -771,7 +772,7 @@ python -m pytest tests/test_logs.py -q
 python -m pytest tests/test_poll.py -k "test_poll_disabled" -v
 ```
 
-> ⚠️ Python 3.13+ hiện không chạy được do `httpx 0.28.1` phụ thuộc module `cgi` đã bị xóa — dùng Python 3.12.
+> ✅ Test suite đã được verify trên cả Python 3.12 và 3.13.
 
 ### Lint & Format (Python)
 

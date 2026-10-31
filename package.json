@@ -1,6 +1,6 @@
 {
   "name": "work-log-harness-frontend",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "private": true,
   "description": "Dev tooling (lint/format) for the Work Log Harness vanilla JS frontend. No build step — modules are served directly.",
   "type": "module",

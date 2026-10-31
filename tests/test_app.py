@@ -24,7 +24,7 @@ class TestAppStructure:
         from app import app
 
         assert app.title == "Work Log Harness"
-        assert app.version == "1.1.0"
+        assert app.version == "2.0.1"
 
     def test_all_api_routes_registered(self, client):
         from app import app
