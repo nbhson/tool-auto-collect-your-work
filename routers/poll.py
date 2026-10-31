@@ -4,12 +4,31 @@ Chạy đồng bộ tất cả pollers, trả về kết quả từng nguồn.
 """
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["poll"])
+
+
+def _run_poller(
+    name: str, enabled: bool, poll_fn: Callable[[], None], results: dict[str, str]
+) -> None:
+    """Chạy một poller và ghi kết quả vào ``results``.
+
+    Lỗi poller được ghi log và báo trong results — không làm fail request.
+    """
+    if not enabled:
+        results[name] = "disabled"
+        return
+    try:
+        poll_fn()
+        results[name] = "ok"
+    except Exception as e:
+        logger.error("%s poll error: %s", name.capitalize(), e)
+        results[name] = f"error: {e}"
 
 
 @router.post("/poll")
@@ -26,46 +45,30 @@ def trigger_poll() -> dict[str, Any]:
 
     results: dict[str, str] = {}
 
-    # ─── GitHub ─────────────────────────────────────
-    if config.GITHUB_TOKEN:
-        try:
-            poll_github()
-            results["github"] = "ok"
-        except Exception as e:
-            logger.error("GitHub poll error: %s", e)
-            results["github"] = f"error: {e}"
-    else:
-        results["github"] = "disabled"
-
-    # ─── Jira ──────────────────────────────────────
-    if config.JIRA_URL and config.JIRA_API_TOKEN:
-        try:
-            poll_jira()
-            results["jira"] = "ok"
-        except Exception as e:
-            logger.error("Jira poll error: %s", e)
-            results["jira"] = f"error: {e}"
-    else:
-        results["jira"] = "disabled"
-
-    # ─── Bitbucket ─────────────────────────────────
-    if config.BITBUCKET_USERNAME and config.BITBUCKET_APP_PASSWORD and config.BITBUCKET_WORKSPACE:
-        try:
-            poll_bitbucket()
-            results["bitbucket"] = "ok"
-        except Exception as e:
-            logger.error("Bitbucket poll error: %s", e)
-            results["bitbucket"] = f"error: {e}"
-    else:
-        results["bitbucket"] = "disabled"
-
-    # ─── Git hooks ─────────────────────────────────
-    try:
-        read_git_hooks()
-        results["git_hooks"] = "ok"
-    except Exception as e:
-        logger.error("Git hook read error: %s", e)
-        results["git_hooks"] = f"error: {e}"
+    _run_poller(
+        "github",
+        bool(config.GITHUB_TOKEN),
+        poll_github,
+        results,
+    )
+    _run_poller(
+        "jira",
+        bool(config.JIRA_URL and config.JIRA_API_TOKEN),
+        poll_jira,
+        results,
+    )
+    _run_poller(
+        "bitbucket",
+        bool(
+            config.BITBUCKET_USERNAME
+            and config.BITBUCKET_APP_PASSWORD
+            and config.BITBUCKET_WORKSPACE
+        ),
+        poll_bitbucket,
+        results,
+    )
+    # Git hooks luôn chạy (đọc file local, không cần config)
+    _run_poller("git_hooks", True, read_git_hooks, results)
 
     successful = [k for k, v in results.items() if v == "ok"]
     failed = [k for k, v in results.items() if v.startswith("error:")]

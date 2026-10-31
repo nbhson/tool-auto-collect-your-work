@@ -1,14 +1,15 @@
 """REST API cho WorkLog CRUD + thống kê."""
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core.exceptions import NotFoundError, ValidationError
+from core.utils import utc_now
 from database.db import get_db
 from database.models import WorkLog
 from services.ai_service import AIService
@@ -50,8 +51,7 @@ class WorkLogOut(BaseModel):
     external_id: str | None = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WorkLogList(BaseModel):
@@ -156,9 +156,9 @@ async def create_log(entry: WorkLogCreate, db: Session = Depends(get_db)):
         description=entry.description,
         project=entry.project,
         url=entry.url,
-        activity_timestamp=entry.activity_timestamp or datetime.now(UTC).replace(tzinfo=None),
+        activity_timestamp=entry.activity_timestamp or utc_now(),
         time_spent_minutes=entry.time_spent_minutes,
-        created_at=datetime.now(UTC).replace(tzinfo=None),
+        created_at=utc_now(),
     )
     db.add(log)
     db.commit()
@@ -222,7 +222,7 @@ def update_log(
     log.activity_type = updates.activity_type
     log.project = updates.project
     log.url = updates.url
-    log.activity_timestamp = updates.activity_timestamp or datetime.now(UTC).replace(tzinfo=None)
+    log.activity_timestamp = updates.activity_timestamp or utc_now()
     log.time_spent_minutes = updates.time_spent_minutes
 
     db.commit()
@@ -233,11 +233,10 @@ def update_log(
 @router.get("/stats", response_model=StatsOut)
 def get_stats(db: Session = Depends(get_db)):
     """Thống kê nhanh cho dashboard."""
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = utc_now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    # Lùi về thứ 2 (Monday)
-    week_start = week_start.replace(day=week_start.day - week_start.weekday())
+    # Đầu tuần: lùi về thứ 2 (Monday) — dùng timedelta để an toàn qua ranh giới tháng
+    week_start = today_start - timedelta(days=now.weekday())
 
     total = db.query(func.count(WorkLog.id)).scalar() or 0
     total_time = db.query(func.coalesce(func.sum(WorkLog.time_spent_minutes), 0)).scalar() or 0

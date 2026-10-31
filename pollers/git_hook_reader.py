@@ -8,10 +8,11 @@ vào bảng work_logs.
 import contextlib
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from config import config
+from core.utils import utc_now
 from database.db import SessionLocal
 from database.models import WorkLog
 
@@ -75,7 +76,7 @@ def read_git_hooks() -> None:
             try:
                 activity_ts = datetime.fromisoformat(ts)
             except (ValueError, TypeError):
-                activity_ts = datetime.now(UTC).replace(tzinfo=None)
+                activity_ts = utc_now()
 
             time_minutes = entry.get("time_spent_minutes", 0)
             try:

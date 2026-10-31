@@ -19,6 +19,7 @@ from pathlib import Path
 import httpx
 
 from config import config
+from core.utils import utc_now
 from database.db import SessionLocal
 from database.models import WorkLog
 from pollers.http import request_with_retry
@@ -160,7 +161,7 @@ def _poll_server(ws_info: dict) -> None:
         since = last_run - timedelta(minutes=2)
     since_epoch = _to_epoch_millis(since) or 0
 
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = utc_now()
 
     db = SessionLocal()
     try:
@@ -643,7 +644,7 @@ def _poll_cloud(workspace: str) -> None:
 
     db = SessionLocal()
     try:
-        now = datetime.now(UTC).replace(tzinfo=None)
+        now = utc_now()
         new_count = 0
 
         repos = _cloud_get_repos(auth_cred, workspace, base_url)
@@ -736,7 +737,7 @@ def _poll_cloud(workspace: str) -> None:
         if new_count > 0:
             db.commit()
 
-        _save_last_run(datetime.now(UTC).replace(tzinfo=None))
+        _save_last_run(utc_now())
 
     except Exception as e:
         db.rollback()

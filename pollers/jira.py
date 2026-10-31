@@ -23,6 +23,7 @@ from pathlib import Path
 import httpx
 
 from config import config
+from core.utils import utc_now
 from database.db import SessionLocal
 from database.models import WorkLog
 from pollers.http import request_with_retry
@@ -128,7 +129,7 @@ def poll_jira() -> None:
 
         db = SessionLocal()
         try:
-            now = datetime.now(UTC).replace(tzinfo=None)
+            now = utc_now()
             new_count = 0
 
             for issue in data.get("issues", []):
@@ -271,7 +272,7 @@ def poll_jira() -> None:
         finally:
             db.close()
 
-        _save_last_run(datetime.now(UTC).replace(tzinfo=None))
+        _save_last_run(utc_now())
 
     except httpx.HTTPStatusError as e:
         logger.error(

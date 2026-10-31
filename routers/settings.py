@@ -4,13 +4,13 @@ Cho phép người dùng cấu hình AI trực tiếp từ UI mà không cần s
 """
 
 import logging
-from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from core.utils import utc_now
 from database.db import get_db
 from database.models import AppSetting
 from services.ai_service import AIService
@@ -66,7 +66,7 @@ def get_settings(db: Session = Depends(get_db)):
 @router.put("")
 def update_settings(items: list[SettingItem], db: Session = Depends(get_db)):
     """Cập nhật settings. Gửi mảng {key, value}."""
-    now = datetime.now(UTC).replace(tzinfo=None)
+    now = utc_now()
     for item in items:
         setting = db.query(AppSetting).filter(AppSetting.key == item.key).first()
         if setting:
