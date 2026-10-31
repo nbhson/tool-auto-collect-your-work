@@ -3,7 +3,14 @@
  */
 
 import { state } from "./state.js";
-import { classifyLog, classifyBatch, fetchSummary, askAI, enhanceLog, enhanceBatch } from "./api.js";
+import {
+  classifyLog,
+  classifyBatch,
+  fetchSummary,
+  askAI,
+  enhanceLog,
+  enhanceBatch,
+} from "./api.js";
 import { showToast } from "./toast.js";
 import { withLoading } from "./loading.js";
 import { loadData } from "./data.js";
@@ -19,7 +26,7 @@ export async function handleClassifySingle(logId) {
       const result = await classifyLog(logId);
       showToast(
         `✨ Classified: "${result.category}" (${Math.round(result.confidence * 100)}% confidence)`,
-        "success"
+        "success",
       );
       loadData();
     } catch (err) {
@@ -41,9 +48,7 @@ export async function classifyUnclassified() {
     await withLoading("✨ Auto-classifying entries...", async () => {
       const result = await classifyBatch();
       const count = result.results ? result.results.length : 0;
-      const highConf = result.results
-        ? result.results.filter((r) => r.confidence > 0.5).length
-        : 0;
+      const highConf = result.results ? result.results.filter((r) => r.confidence > 0.5).length : 0;
       showToast(`✨ Classified ${count} entries (${highConf} with high confidence)`, "success");
       loadData();
     });

@@ -25,7 +25,7 @@ export function renderSkeleton() {
         <td><div class="skeleton" style="height:16px;width:120px"></div></td>
         <td><div class="skeleton" style="height:16px;width:50px"></div></td>
         <td><div class="skeleton" style="height:16px;width:40px"></div></td>
-      </tr>`
+      </tr>`,
   ).join("");
 }
 
@@ -203,7 +203,7 @@ export function renderPagination(total) {
 
   const maxVisible = 5;
   let startPage = Math.max(1, state.page - Math.floor(maxVisible / 2));
-  let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+  const endPage = Math.min(totalPages, startPage + maxVisible - 1);
   if (endPage - startPage + 1 < maxVisible) {
     startPage = Math.max(1, endPage - maxVisible + 1);
   }

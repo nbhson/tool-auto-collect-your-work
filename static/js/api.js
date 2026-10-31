@@ -43,11 +43,14 @@ export class ApiError extends Error {
  * @returns {Promise<any>} Parsed JSON body (undefined for 204).
  * @throws {ApiError} On non-2xx response or exhausted retries.
  */
-export async function apiFetch(url, { method = "GET", body, timeout = DEFAULT_TIMEOUT, retries = MAX_RETRIES } = {}) {
-  const canRetry = method === "GET" || method === "HEAD";
+export async function apiFetch(
+  url,
+  { method = "GET", body, timeout = DEFAULT_TIMEOUT, retries = MAX_RETRIES } = {},
+) {
+  const retryable = method === "GET" || method === "HEAD";
   let lastError = null;
 
-  for (let attempt = 0; attempt <= (canRetry(method) ? retries : 0); attempt++) {
+  for (let attempt = 0; attempt <= (retryable ? retries : 0); attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
@@ -68,7 +71,7 @@ export async function apiFetch(url, { method = "GET", body, timeout = DEFAULT_TI
     } catch (err) {
       if (err instanceof ApiError && err.status > 0 && err.status < 500) throw err;
       lastError = err;
-      if (attempt < (canRetry(method) ? retries : 0)) {
+      if (attempt < (retryable ? retries : 0)) {
         await sleep(RETRY_DELAY * 2 ** attempt);
         continue;
       }
@@ -80,15 +83,6 @@ export async function apiFetch(url, { method = "GET", body, timeout = DEFAULT_TI
 
   if (lastError instanceof ApiError) throw lastError;
   throw new ApiError(lastError?.message || "Network error", 0);
-}
-
-/**
- * Whether the HTTP method is safe to retry automatically.
- * @param {string} method - HTTP method.
- * @returns {boolean} True for idempotent methods.
- */
-function canRetry(method) {
-  return method === "GET" || method === "HEAD";
 }
 
 /**

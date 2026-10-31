@@ -6,6 +6,7 @@ import { state } from "./state.js";
 import { fetchSettings, saveSettings, testConnection } from "./api.js";
 import { showToast } from "./toast.js";
 import { withButtonLoading } from "./loading.js";
+import { escapeHtml } from "./format.js";
 
 /** Provider presets shown in the settings modal. */
 export const PROVIDER_PRESETS = {
@@ -33,7 +34,8 @@ export const PROVIDER_PRESETS = {
   openrouter: {
     base_url: "https://openrouter.ai/api/v1",
     model: "openai/gpt-4o",
-    key_hint: 'Get key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>',
+    key_hint:
+      'Get key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>',
     model_hint: "Thousands of models available",
   },
   deepseek: {
@@ -169,7 +171,7 @@ export async function handleSettingsSave(e) {
     try {
       await saveSettings(items);
       showToast("✅ AI settings saved!", "success");
-      closeSettingsModal();
+      window.closeSettingsModal();
       await loadSettings();
     } catch (err) {
       showToast(`❌ ${err.message}`, "error", 5000);
@@ -233,9 +235,17 @@ export async function testAIConnection() {
     showTestResult(`❌ ${err.message}`, "#dc3545");
     restoreModelInput();
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="bi bi-plug me-1"></i>Test Connection & Load Models';
+    resetTestButton(btn);
   }
+}
+
+/**
+ * Restore the test-connection button to its idle state.
+ * @param {HTMLButtonElement} btn - The test-connection button.
+ */
+function resetTestButton(btn) {
+  btn.disabled = false;
+  btn.innerHTML = '<i class="bi bi-plug me-1"></i>Test Connection & Load Models';
 }
 
 /**

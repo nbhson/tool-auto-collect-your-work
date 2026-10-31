@@ -1,4 +1,6 @@
 // @ts-check
+import globals from "globals";
+
 /** @type {import("eslint").Linter.Config[]} */
 export default [
   {
@@ -10,17 +12,8 @@ export default [
       ecmaVersion: 2023,
       sourceType: "module",
       globals: {
-        window: "readonly",
-        document: "readonly",
-        console: "readonly",
-        fetch: "readonly",
-        AbortController: "readonly",
-        URL: "readonly",
-        setTimeout: "readonly",
-        clearTimeout: "readonly",
-        setInterval: "readonly",
-        confirm: "readonly",
-        bootstrap: "readonly",
+        ...globals.browser,
+        bootstrap: "readonly", // Bootstrap 5 global (loaded via CDN)
       },
     },
     rules: {

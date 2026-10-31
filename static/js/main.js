@@ -9,13 +9,7 @@
  */
 
 import { state, setEditingId, getEditingId } from "./state.js";
-import {
-  createLog,
-  updateLog,
-  deleteLog,
-  fetchLogsPage,
-  triggerPollRequest,
-} from "./api.js";
+import { createLog, updateLog, deleteLog, fetchLogsPage, triggerPollRequest } from "./api.js";
 import { showToast } from "./toast.js";
 import { withLoading, withButtonLoading } from "./loading.js";
 import { loadData, refreshPage, startAutoRefresh } from "./data.js";
@@ -192,9 +186,7 @@ function toggleFilterRow() {
  */
 function scrollToTable() {
   if (window.innerWidth < 768) {
-    document
-      .querySelector(".table-card")
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.querySelector(".table-card")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 }
 
@@ -379,8 +371,7 @@ async function triggerPoll() {
 
   const origHTML = btn.innerHTML;
   btn.disabled = true;
-  btn.innerHTML =
-    '<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>';
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>';
 
   try {
     await runPoll();
@@ -554,9 +545,7 @@ function init() {
     });
     cmdInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
-        const visible = document.querySelector(
-          '.cmd-modal-item:not([style*="display: none"])'
-        );
+        const visible = document.querySelector('.cmd-modal-item:not([style*="display: none"])');
         if (visible) visible.click();
       }
     });

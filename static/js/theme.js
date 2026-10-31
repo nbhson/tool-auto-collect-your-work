@@ -32,7 +32,7 @@ function applyTheme() {
   if (toggleBtn) {
     toggleBtn.setAttribute(
       "aria-label",
-      state.theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+      state.theme === "dark" ? "Switch to light mode" : "Switch to dark mode",
     );
   }
 }
